@@ -26,3 +26,7 @@ result = agent.run(task)
 
 print("\n--- Ergebnis des Agenten ---")
 print(result)
+
+# Ausgabe: Auf Kleinazeigen liegt der Preis so bei 80 € VB.
+#--- Ergebnis des Agenten ---
+# Der durchschnittliche Preis für einen gebrauchten IKEA Kallax Regal 4x4 beträgt etwa 86 €.
