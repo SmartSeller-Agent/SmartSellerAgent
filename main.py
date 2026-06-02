@@ -1,31 +1,41 @@
 from smolagents import ToolCallingAgent, OpenAIServerModel, tool, DuckDuckGoSearchTool
 
+from config import OLLAMA_API_BASE, OLLAMA_API_KEY, TEXT_MODEL_ID
+from tools.vision import analyze_product_image
+
 # pip install duckduckgo-search
 # pip install ddgs
+# ollama pull llava
+# pip install requests
 
 webSearch = DuckDuckGoSearchTool()
+vision_tool = analyze_product_image
 
 model = OpenAIServerModel(
-    model_id="qwen3:1.7b",
-    api_base="http://localhost:11434/v1",
-    api_key="ollama"
+    model_id=TEXT_MODEL_ID,
+    api_base=OLLAMA_API_BASE,
+    api_key=OLLAMA_API_KEY
 )
 
 agent = ToolCallingAgent(
-    tools=[webSearch],
+    tools=[webSearch, vision_tool],
     model=model
 )
 
 task = """
-Bitte suche im Internet nach dem aktuellen Preis für einen gebrauchten 'Ikea Kallax Regal 4x4' auf Kleinanzeigen oder generell.
-Nutze dein Suchwerkzeug, um echte Daten zu finden und fasse den durchschnittlichen Preis in einem kurzen Satz zusammen.
+Analysiere zuerst das Bild unter dem Pfad 'testBilder/Kallax4x4_leer.png' mit deinem Vision-Tool, um herauszufinden, um welches Produkt es 
+sich handelt.
+Suche anschließend mit dem Suchwerkzeug nach dem aktuellen Gebrauchtpreis für dieses erkannte Produkt im Internet.
+Gebe mir am Ende eine kurze Zusammenfassung, um welches Produkt es sich handelt und wie hoch der durchschnittliche Preis für 
+dieses Produkt auf Kleinanzeigen ist. Bitte antworte auf deutsch und in Euro.
 """
 
-print("Agent startet die echte Web-Suche... Das kann einen Moment dauern.")
-result = agent.run(task)
+if __name__ == "__main__":
+    print("Agent startet die echte Web-Suche... Das kann einen Moment dauern.")
+    result = agent.run(task)
 
-print("\n--- Ergebnis des Agenten ---")
-print(result)
+    print("\n--- Ergebnis des Agenten ---")
+    print(result)
 
 # Ausgabe: Auf Kleinazeigen liegt der Preis so bei 80 € VB.
 #--- Ergebnis des Agenten ---
