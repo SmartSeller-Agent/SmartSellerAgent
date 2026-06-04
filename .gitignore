@@ -1,0 +1,15 @@
+# API Keys env files
+.env
+
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Build / packaging artifacts
+*.egg-info/
+dist/
+build/
