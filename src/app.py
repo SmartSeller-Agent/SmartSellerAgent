@@ -6,8 +6,11 @@ from smolagents import ToolCallingAgent, OpenAIServerModel, DuckDuckGoSearchTool
 # Imports: Config, API Keys
 from src.config import OLLAMA_API_BASE, OLLAMA_API_KEY, TEXT_MODEL_ID
 
-# Imports: Tracing
+# Imports: Tracing, Logging
 from src.tracing import setup_tracing
+import logging
+logging.getLogger("opentelemetry.exporter.otlp").setLevel(logging.DEBUG)
+logging.getLogger("urllib3").setLevel(logging.DEBUG)
 
 # Imports: Tools
 from src.tools.vision import analyze_product_image
