@@ -1,10 +1,23 @@
-import os
 from pathlib import Path
 
-from smolagents import ToolCallingAgent, OpenAIServerModel, tool, DuckDuckGoSearchTool
+# Imports: Agents
+from smolagents import ToolCallingAgent, OpenAIServerModel, DuckDuckGoSearchTool
 
+# Imports: Config, API Keys
 from src.config import OLLAMA_API_BASE, OLLAMA_API_KEY, TEXT_MODEL_ID
+
+# Imports: Tracing, Logging
+from src.tracing import setup_tracing
+import logging
+logging.getLogger("opentelemetry.exporter.otlp").setLevel(logging.DEBUG)
+logging.getLogger("urllib3").setLevel(logging.DEBUG)
+
+# Imports: Tools
 from src.tools.vision import analyze_product_image
+from src.tools.pricing import calculate_margin
+
+# setup tracing
+tracer_provider = setup_tracing()
 
 # Absoluten Pfad relativ zu dieser Datei berechnen
 _project_root = Path(__file__).parent.parent  # src/ -> Projektstamm
@@ -12,6 +25,7 @@ _image_path = _project_root / "test" / "images" / "Kallax4x4_leer.png"
 
 webSearch = DuckDuckGoSearchTool()
 vision_tool = analyze_product_image
+pricing_tool = calculate_margin
 
 model = OpenAIServerModel(
     model_id=TEXT_MODEL_ID,
@@ -20,23 +34,32 @@ model = OpenAIServerModel(
 )
 
 agent = ToolCallingAgent(
-    tools=[webSearch, vision_tool],
-    model=model
+    tools=[webSearch, vision_tool, pricing_tool],
+    model=model,
+    max_steps=6,    # @TODO: adjust if bigger LLMs are used of increase if the task is more complex
 )
 
-task = f"""
-First, analyse the image located at the path '{_image_path}' using your vision tool to identify which product it 
-is.
-Then use the search tool to find the current second-hand price for this identified product on the internet.
-Finally, give me a brief summary of which product it is and what the average price for 
-this product is on classified ad sites. Please reply in German and in euros.
+#task = f"""
+#First, analyse the image located at the path '{_image_path}' using your vision tool to identify which product it 
+#is.
+#Then use the search tool to find the current second-hand price for this identified product on the internet.
+#Finally, give me a brief summary of which product it is and what the average price for 
+#this product is on classified ad sites. Please reply in German and in euros.
+#"""
+
+task = """
+I bought a used IKEA Kallax shelf for 20 euros and want to resell it for 45 euros.
+Use the calculate_margin tool to tell me my profit and margin percentage.
 """
 
 def main():
     print("The agent is starting the actual web search... This may take a moment.")
-    result = agent.run(task)
-    print("\n--- Agent's result ---")
-    print(result)
+    try:
+        result = agent.run(task)
+        print("\n--- Agent's result ---")
+        print(result)
+    finally:
+        tracer_provider.shutdown()  # flushes all buffered spans before exit
 
 if __name__ == "__main__":
     main()
