@@ -1,4 +1,7 @@
+
+# -------------------------- Imports --------------------------
 from pathlib import Path
+import yaml
 
 # Imports: Agents
 from smolagents import ToolCallingAgent, OpenAIServerModel, DuckDuckGoSearchTool
@@ -16,12 +19,20 @@ logging.getLogger("urllib3").setLevel(logging.DEBUG)
 from src.tools.vision import analyze_product_image
 from src.tools.pricing import calculate_margin
 
+#-------------------------- Code --------------------------
 # setup tracing
 tracer_provider = setup_tracing()
 
 # Absoluten Pfad relativ zu dieser Datei berechnen
 _project_root = Path(__file__).parent.parent  # src/ -> Projektstamm
 _image_path = _project_root / "test" / "images" / "Kallax4x4_leer.png"
+
+# Load prompts from YAML file
+_prompts_path = _project_root / "src" / "prompts.yaml"
+with open(_prompts_path, encoding="utf-8") as f:
+    _prompts = yaml.safe_load(f)
+custom_instructions = _prompts["instructions"]
+tasks = _prompts["tasks"]
 
 webSearch = DuckDuckGoSearchTool()
 vision_tool = analyze_product_image
@@ -37,20 +48,11 @@ agent = ToolCallingAgent(
     tools=[webSearch, vision_tool, pricing_tool],
     model=model,
     max_steps=6,    # @TODO: adjust if bigger LLMs are used of increase if the task is more complex
+    instructions=custom_instructions,
 )
 
-#task = f"""
-#First, analyse the image located at the path '{_image_path}' using your vision tool to identify which product it 
-#is.
-#Then use the search tool to find the current second-hand price for this identified product on the internet.
-#Finally, give me a brief summary of which product it is and what the average price for 
-#this product is on classified ad sites. Please reply in German and in euros.
-#"""
-
-task = """
-I bought a used IKEA Kallax shelf for 20 euros and want to resell it for 45 euros.
-Use the calculate_margin tool to tell me my profit and margin percentage.
-"""
+# Choose the task you want the agent to solve by selecting the corresponding prompt from the loaded YAML file
+task = tasks["margin_check"]
 
 def main():
     print("The agent is starting the actual web search... This may take a moment.")
