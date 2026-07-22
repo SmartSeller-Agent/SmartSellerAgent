@@ -22,16 +22,19 @@ agent = ToolCallingAgent(
     model=model
 )
 
-task = """
-Analysiere zuerst das Bild unter dem Pfad 'testBilder/Kallax4x4_leer.png' mit deinem Vision-Tool, um herauszufinden, um welches Produkt es 
-sich handelt.
-Suche anschließend mit dem Suchwerkzeug nach dem aktuellen Gebrauchtpreis für dieses erkannte Produkt im Internet.
-Gebe mir am Ende eine kurze Zusammenfassung, um welches Produkt es sich handelt und wie hoch der durchschnittliche Preis für 
-dieses Produkt auf Kleinanzeigen ist. Bitte antworte auf deutsch und in Euro.
+image_path = "test/images/Kallax4x4_leer.png"
+
+task = f"""
+Du bist ein professionelle*r Verkaufsassistent*in. Gehe zwingend Schritt für Schritt vor und rufe nicht mehrere Tools gleichzeitig auf!
+
+Schritt 1: Nutze das Vision-Tool mit dem Dateipfad '{image_path}', um das Produkt zu erkennen.
+Schritt 2: WARTE auf die Antwort des Vision-Tools. Nutze unter keinen Umständen den Dateinamen für deine Websuche!
+Schritt 3: Bilde einen sinnvollen Suchbegriff aus dem erkannten Produkt (z. B. "IKEA Kallax 4x4 gebraucht Preis"). Suche damit im Internet nach aktuellen Preisen auf Kleinanzeigen.
+Schritt 4: Erstelle eine kurze Zusammenfassung auf Deutsch. Nenne das Produkt und den durchschnittlichen Gebrauchtpreis in Euro.
 """
 
 if __name__ == "__main__":
-    print("Agent startet die echte Web-Suche... Das kann einen Moment dauern.")
+    print("Agent startet... Der TAO-Zyklus (Thought, Action, Observation) wird nun im Terminal mitgeloggt.")
     result = agent.run(task)
 
     print("\n--- Ergebnis des Agenten ---")

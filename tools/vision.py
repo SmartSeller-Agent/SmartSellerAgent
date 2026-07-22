@@ -18,7 +18,8 @@ def analyze_product_image(image_path: str) -> str:
         # 2. Anfrage an die lokale Ollama-API mit dem Vision-Modell 'llava'
         payload = {
             "model": "llava",
-            "prompt": "Was für ein Produkt ist auf diesem Bild zu sehen? Nenne kurz den genauen Produktnamen und die Marke.",
+            "prompt": "Du bist ein Experte, der Gegenstände erkennen kann. Auf dem Bild ist ein Gegenstand. Nenne mir nur den Namen des Gegenstands "
+            "und die Marke (z. B. IKEA Kallax, Cube Fahrrad, IPhone 10, T-Shirt, etc.). Antworte extrem kurz und präzise.",
             "stream": False,
             "images": [base64_image]
         }
