@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[project]
+name = "smartselleragent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "ddgs>=9.14.4",
+    "duckduckgo-search>=8.1.1",
+    "langfuse>=4.7.1",
+    "llava>=0.0.1.dev0",
+    "openai>=2.41.0",
+    "pathlib>=1.0.1",
+    "requests>=2.34.2",
+    "smolagents[toolkit,telemetry]>=1.26.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+    "openinference-instrumentation-smolagents>=0.1.0",
+]
+
+[project.scripts]
+smartselleragent = "src.app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.15.16",
+]
+
+[tool.uv]
+package = true
