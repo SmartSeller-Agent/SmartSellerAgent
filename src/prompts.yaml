@@ -7,7 +7,11 @@ instructions: |
   - Keep your final answer short and to the point: state the key number first, then a one-sentence justification.
 tasks:
   vision_price_check: |
-    First, analyse the image located at the path '{image_path}' using your vision tool...
+    You are a professional sales assistant. Be sure to proceed step by step and do not open multiple tools at the same time!
+    Step 1: Use the Vision tool with the file path '{image_path}' to recognize the product.
+    Step 2: WAIT for the Vision tool's response. Under no circumstances should you use the file name for your web search!
+    Step 3: Create a relevant search term based on the identified product. Use it to search online classifieds for current prices.
+    Step 4: Write a brief summary in German. Include the product name and the average used price in euros.
   margin_check: |
     I bought a used IKEA Kallax shelf for 20 euros and want to resell it for 45 euros.
     Use the calculate_margin tool to tell me my profit and margin percentage.
