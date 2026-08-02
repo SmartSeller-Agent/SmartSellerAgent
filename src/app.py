@@ -23,7 +23,7 @@ from src.tools.pricing import calculate_margin
 # setup tracing
 tracer_provider = setup_tracing()
 
-# Absoluten Pfad relativ zu dieser Datei berechnen
+# Calculate the absolute path relative to this file
 _project_root = Path(__file__).parent.parent  # src/ -> Projektstamm
 _image_path = _project_root / "test" / "images" / "Kallax4x4_leer.png"
 
@@ -31,11 +31,14 @@ _image_path = _project_root / "test" / "images" / "Kallax4x4_leer.png"
 _prompts_path = _project_root / "src" / "prompts.yaml"
 with open(_prompts_path, encoding="utf-8") as f:
     _prompts = yaml.safe_load(f)
-custom_instructions = _prompts["instructions"]
-tasks = _prompts["tasks"]
 
+# TOOL: Web Search Tool
 webSearch = DuckDuckGoSearchTool()
+
+# TOOL: Vision Tool: Analyze the product image and extract relevant information (e.g., product name, condition, etc.)
 vision_tool = analyze_product_image
+
+# TOOL: Pricing Tool: Calculate the margin based on the extracted information and the web search results (mainly for debugging)
 pricing_tool = calculate_margin
 
 model = OpenAIServerModel(
@@ -44,20 +47,42 @@ model = OpenAIServerModel(
     api_key=OLLAMA_API_KEY
 )
 
-agent = ToolCallingAgent(
-    tools=[webSearch, vision_tool, pricing_tool],
+# --- Subagent: analyzes product photos only ---
+vision_agent = ToolCallingAgent(
+    tools=[vision_tool],
     model=model,
-    max_steps=6,    # @TODO: adjust if bigger LLMs are used of increase if the task is more complex
-    instructions=custom_instructions,
+    instructions=_prompts["vision_agent"]["instructions"],
+    max_steps=4,
+    name="vision_agent",
+    description=(
+        "Analyzes a product photo and reports back what the item is: "
+        "product name/category, brand (if visible) and visible condition. "
+        "Call it with a task that includes the local image file path, "
+        "e.g. \"Analyze the product image at 'test/images/Kallax4x4.png'.\""
+    ),
 )
 
-# Choose the task you want the agent to solve by selecting the corresponding prompt from the loaded YAML file
-task = tasks["margin_check"]
+# --- Orchestrator: owns the end-to-end resale evaluation workflow ---
+orchestrator = ToolCallingAgent(
+    tools=[webSearch, pricing_tool],
+    model=model,
+    managed_agents=[vision_agent],
+    instructions=_prompts["orchestrator"]["instructions"],
+    max_steps=10,
+    name="orchestrator",
+    description="Coordinates the end-to-end resale evaluation: image analysis, price research, margin calculation and recommendation.",
+)
+
+# Build the task: full multi-agent workflow over the sample image
+task = _prompts["orchestrator"]["tasks"]["full_evaluation"].format(
+    image_path=_image_path,
+    purchase_price=20,
+)
 
 def main():
-    print("The agent is starting the actual web search... This may take a moment.")
+    print("Smart Seller Agent is starting the evaluation... This may take a moment.")
     try:
-        result = agent.run(task)
+        result = orchestrator.run(task)
         print("\n--- Agent's result ---")
         print(result)
     finally:
