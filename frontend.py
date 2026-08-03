@@ -1,9 +1,15 @@
+import os
 import streamlit as st
 import requests
 from pathlib import Path
 
 # --- Konfiguration ---
-API_URL = "http://127.0.0.1:8000/run-task"
+# Basis-URL des Backends. Der Default gilt für den lokalen Start (uvicorn und
+# Streamlit auf demselben Rechner). Unter Docker zeigt 127.0.0.1 auf den
+# Frontend-Container selbst, deshalb setzt docker-compose.yml hier den
+# Servicenamen: http://api:8000
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+API_URL = f"{API_BASE_URL}/run-task"
 
 # Ordner für Datei-Uploads anlegen
 UPLOAD_DIR = Path("test/images/uploads")

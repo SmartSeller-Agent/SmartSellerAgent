@@ -51,31 +51,19 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # The virtual environment built in stage 1
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
-# Application code, prompt templates and the sample images used by the demo task
-COPY --chown=app:app pyproject.toml README.md ./
+# Application code, prompt templates, the Streamlit UI and the sample images
+COPY --chown=app:app pyproject.toml README.md frontend.py ./
 COPY --chown=app:app src/ ./src/
 COPY --chown=app:app test/ ./test/
 
+# Upload target of the Streamlit frontend. Created here so it exists and is
+# writable for the unprivileged user even before the shared volume is mounted.
+RUN mkdir -p /app/test/images/uploads && chown -R app:app /app/test/images
+
 USER app
 
-# Reserved for W6 (FastAPI prediction service) / W11 (/health endpoint).
-# Documented here so switching to service mode only requires swapping CMD
-# and publishing the port in docker-compose.yml.
-EXPOSE 8000
+EXPOSE 8000 8501
 
-# Default: run the agent workflow once (current CLI entrypoint of src/app.py).
-CMD ["python", "-m", "src.app"]
-
-# --- API mode (once W6 is merged) ---------------------------------------
-# Replace the CMD above with:
-#   CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
-# and add to the app service in docker-compose.yml:
-#   ports:
-#     - "8000:8000"
-#   healthcheck:
-#     test: ["CMD", "python", "-c",
-#            "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-#     interval: 15s
-#     timeout: 5s
-#     retries: 5
-#     start_period: 20s
+# One image, two roles — docker-compose.yml overrides the command for the
+# frontend service. Default is the API (W6: prediction service, W11: /health).
+CMD ["uvicorn", "src.app:api", "--host", "0.0.0.0", "--port", "8000"]

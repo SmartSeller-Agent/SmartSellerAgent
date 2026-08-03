@@ -51,24 +51,40 @@ cp .env.example .env
 
 ### Option A — Docker (W7)
 
-The whole stack — LLM runtime, model download and the agent itself — starts with a
-single command. Nothing except Docker needs to be installed on the host; a local
-Ollama installation is *not* required.
+The whole stack — LLM runtime, model download, backend and web UI — starts with a
+single command. Nothing except Docker needs to be installed on the host; neither a
+local Ollama nor a local Python environment is required.
 
 ```bash
 docker compose up --build
 ```
 
-What happens:
+Once everything is up:
 
-| Service       | Role                                                                              |
-|---------------|-----------------------------------------------------------------------------------|
-| `ollama`      | Local LLM runtime, serves the text and vision models inside the compose network    |
-| `ollama-init` | One-shot job: pulls `TEXT_MODEL_ID` and `VISION_MODEL_ID`, then exits               |
-| `app`         | The smolagents multi-agent workflow ([`src/app.py`](src/app.py)), runs once and exits |
+| URL                            | What                                             |
+|--------------------------------|--------------------------------------------------|
+| http://localhost:8501          | **Streamlit web UI** — upload a photo, get a listing |
+| http://localhost:8000/docs     | Interactive API documentation (Swagger)          |
+| http://localhost:8000/health   | Health endpoint (W11)                            |
 
-`app` starts only after `ollama-init` has completed successfully, so the agent never
-talks to a runtime that has no models yet.
+The four services:
+
+| Service       | Role                                                                            |
+|---------------|---------------------------------------------------------------------------------|
+| `ollama`      | Local LLM runtime, serves the text and vision models inside the compose network  |
+| `ollama-init` | One-shot job: pulls `TEXT_MODEL_ID` and `VISION_MODEL_ID`, then exits             |
+| `api`         | FastAPI backend ([`src/app.py`](src/app.py)) with the multi-agent system          |
+| `frontend`    | Streamlit UI ([`frontend.py`](frontend.py))                                       |
+
+The startup order is enforced by Compose: `ollama` must pass its healthcheck, then
+`ollama-init` must finish pulling the models, then `api` starts and must answer on
+`/health`, and only then does `frontend` come up. So the UI is never reachable
+before the system behind it can actually serve a request.
+
+`api` and `frontend` run from the *same* image and differ only in their command.
+The uploaded image is written to the shared `uploads` volume, mounted into both
+containers — the frontend hands the backend a file path, so both must see the same
+directory.
 
 > **First start takes a while.** The models are downloaded on the first run (several
 > GB, depending on `TEXT_MODEL_ID`). They are cached in the named volume
@@ -80,9 +96,10 @@ Useful commands:
 
 ```bash
 docker compose up --build          # build and start everything
-docker compose logs -f app         # follow the agent output (TAO cycle, tool calls)
+docker compose ps                  # service status incl. health
+docker compose logs -f api         # follow the agent output (TAO cycle, tool calls)
 docker compose down                # stop (models stay cached)
-docker compose down -v             # stop and delete the downloaded models
+docker compose down -v             # stop and delete models and uploads
 ```
 
 Configuration: a `.env` file is optional. If present, `TEXT_MODEL_ID`,
@@ -94,11 +111,17 @@ apply and the stack still runs (tracing is then simply skipped).
 ### Option B — locally with `uv`
 
 Requires a running Ollama on the host with the models from `.env` already pulled.
+Backend and frontend are two processes, so they need two terminals — see
+[How to Run](#how-to-run) below for details and verification tips.
 
 ```bash
 uv sync
-uv run smartselleragent
+uv run smartselleragent                      # terminal 1: API on 127.0.0.1:8000
+uv run streamlit run frontend.py             # terminal 2: UI on localhost:8501
 ```
+
+The frontend talks to `http://127.0.0.1:8000` by default; override with the
+`API_BASE_URL` environment variable (this is what the Docker setup does).
 
 ## Architecture Overview
 The system is built on the principles of a Service-Oriented Architecture (SOA) and strictly separates the user interface from data processing:

@@ -1,11 +1,14 @@
-# SmartSellerAgent — full stack (W7: Containerisation)
+# SmartSellerAgent — full stack (W6: prediction service, W7: containerisation, W11: /health)
 #
 #   docker compose up --build
 #
-# Starts three services:
+# Starts four services:
 #   ollama       — local LLM runtime serving the text and vision models
 #   ollama-init  — one-shot job that pulls the required models, then exits
-#   app          — the smolagents multi-agent workflow (src/app.py)
+#   api          — FastAPI backend (src/app.py:api)   -> http://localhost:8000
+#   frontend     — Streamlit UI (frontend.py)         -> http://localhost:8501
+#
+# api and frontend run from the same image, they only differ in their command.
 #
 # Values are read from .env when present (see .env.example); the defaults
 # below keep the stack runnable without any local configuration.
@@ -69,18 +72,20 @@ services:
     restart: "no"
 
   # ------------------------------------------------------------------
-  # The agent application
+  # FastAPI backend — the prediction service (W6)
   # ------------------------------------------------------------------
-  app:
+  api:
     build:
       context: .
       dockerfile: Dockerfile
     image: smartselleragent:latest
-    container_name: smartseller-app
+    container_name: smartseller-api
     depends_on:
       ollama-init:
         # Waits for the pulls to finish successfully before starting
         condition: service_completed_successfully
+    ports:
+      - "8000:8000"
     environment:
       # Inside the compose network the runtime is reachable by service name,
       # so these deliberately override any localhost value coming from .env.
@@ -94,15 +99,47 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
-    # One-shot CLI run: the container exits after the evaluation is printed.
-    restart: "no"
-    # --- Optional: use your own product photos without rebuilding ---------
-    # volumes:
-    #   - ./test/images:/app/test/images:ro
-    #
-    # --- API mode (once W6 is merged) ------------------------------------
-    # ports:
-    #   - "8000:8000"
+    volumes:
+      # Shared with the frontend: it writes the uploaded image here and passes
+      # the path to /run-task, so both containers must see the same directory.
+      - uploads:/app/test/images/uploads
+    # W11: the /health route doubles as the container healthcheck
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
+  # Streamlit frontend — same image as api, different command
+  # ------------------------------------------------------------------
+  frontend:
+    image: smartselleragent:latest
+    container_name: smartseller-frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    environment:
+      # 127.0.0.1 would be the frontend container itself — talk to the api service
+      API_BASE_URL: http://api:8000
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+    volumes:
+      - uploads:/app/test/images/uploads
+    command:
+      - streamlit
+      - run
+      - frontend.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      # No browser to open inside a container, and skips the first-run e-mail prompt
+      - --server.headless=true
+    restart: unless-stopped
 
 volumes:
   ollama-models:
+  uploads:

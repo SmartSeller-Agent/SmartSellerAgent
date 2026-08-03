@@ -117,3 +117,18 @@ def run_agent_task(request: TaskRequest):
         return {"task": request.task_name, "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def main():
+    """Console-script entry point (`uv run smartselleragent`) — serves the API.
+
+    The container does not use this: it runs the uvicorn CLI directly and binds
+    to 0.0.0.0 so the port can be published (see Dockerfile / docker-compose.yml).
+    """
+    import uvicorn
+
+    uvicorn.run(api, host="127.0.0.1", port=8000)
+
+
+if __name__ == "__main__":
+    main()
