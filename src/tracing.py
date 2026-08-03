@@ -4,7 +4,6 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, ConsoleSpanExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from openinference.instrumentation.smolagents import SmolagentsInstrumentor
-from requests import auth
 
 from src.config import LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST
 
@@ -27,6 +26,17 @@ class _DebugExporter:
 
 
 def setup_tracing() -> TracerProvider:
+    provider = TracerProvider()
+
+    # Without credentials every span export would run into a 401 (and the OTLP
+    # retries would stall the run). Instrument anyway so the agent behaves
+    # identically, just without exporting — this keeps `docker compose up`
+    # working out of the box when no Langfuse account is configured.
+    if not (LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY):
+        print("[tracing] no Langfuse credentials found — continuing without span export")
+        SmolagentsInstrumentor().instrument(tracer_provider=provider)
+        return provider
+
     auth = base64.b64encode(
         f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}".encode()
     ).decode()
@@ -38,8 +48,6 @@ def setup_tracing() -> TracerProvider:
         endpoint=f"{LANGFUSE_HOST}/api/public/otel/v1/traces",
         headers={"Authorization": f"Basic {auth}"},
     )
-
-    provider = TracerProvider()
 
     # PROVIDER 1: use this exporter for debugging to see the spans in the console
     #provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))  # for debugging purposes, prints spans to console
