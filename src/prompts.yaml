@@ -21,6 +21,16 @@ orchestrator:
     margin_check: |
       I bought a used IKEA Kallax shelf for 20 euros and want to resell it for 45 euros.
       Use the calculate_margin tool to tell me my profit and margin percentage.
+    create_listing: |
+      Your task is to create a sales listing for platforms such as classifieds or Vinted.
+      The picture of the product is located at '{image_path}'.
+      Step 1: Use the Vision Tool to recognize and identify the product in the uploaded image.
+      Step 2: Use the WebSearch Tool to research current, realistic market prices for this used product online.
+      Step 3: Use this information to create an appealing sales description in German.
+      The final text must be well-structured and must include the following: 
+      - A catchy title
+      - A brief, positive product description
+      - A specific price proposal based on your research (indicate whether it is negotiable or a fixed price).
 
 vision_agent:
   instructions: |
