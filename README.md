@@ -101,4 +101,30 @@ uv run smartselleragent
 ```
 
 ## Architecture Overview
-@TODO: Add a brief architecture overview.
+The system is built on the principles of a Service-Oriented Architecture (SOA) and strictly separates the user interface from data processing:
+
+*   **Frontend (Streamlit):** A lightweight web interface that manages the file upload and communicates asynchronously with the API.
+*   **Backend (FastAPI):** Provides REST endpoints (`/run-task`) to receive requests in a standardized manner.
+*   **Multi-Agent-System (smolagents):**
+    *   **Orchestrator:** The main agent that controls the workflow and has access to the WebSearch and Pricing tools.
+    *   **Vision-Agent:** A sub-agent exclusively responsible for the visual analysis of the product images.
+*   **Models (Ollama):** The local execution of the LLMs ensures data privacy and independence from cloud costs.
+
+## How to Run
+The system consists of two independent components that need to be started in separate terminals.
+
+**Terminal 1: Start Backend (FastAPI Server)**
+
+Start the interface first. This process must continue running in the background.
+```bash
+python -m uv run uvicorn src.app:api --reload
+```
+*Verification Tip:* Open **http://127.0.0.1:8000/health** in your browser. If you see `{"status":"ok", "message":"Der SmartSeller Agent läuft!"}`, the backend has started successfully. The interactive documentation for developers can be found at `http://127.0.0.1:8000/docs`.
+
+**Terminal 2: Start Frontend (Streamlit)**
+
+Open a second terminal window and start the user interface.
+```bash
+python -m uv run streamlit run frontend.py
+```
+*The browser will open automatically (at `http://localhost:8501`) and the system is ready to use.*

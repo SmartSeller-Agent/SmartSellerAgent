@@ -16,3 +16,6 @@ build/
 
 # vs code settings
 .vscode/
+
+# test images
+test/images/uploads/*
