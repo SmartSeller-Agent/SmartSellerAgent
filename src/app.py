@@ -10,7 +10,7 @@ from typing import Optional
 from smolagents import ToolCallingAgent, OpenAIServerModel, DuckDuckGoSearchTool
 
 # Imports: Config, API Keys
-from src.config import OLLAMA_API_BASE, OLLAMA_API_KEY, TEXT_MODEL_ID
+from src.config import TEXT_API_BASE, TEXT_API_KEY, TEXT_MODEL_ID, MODEL_EXTRA_BODY
 
 # Imports: Tracing, Logging
 from src.tracing import setup_tracing
@@ -46,9 +46,14 @@ pricing_tool = calculate_margin
 
 model = OpenAIServerModel(
     model_id=TEXT_MODEL_ID,
-    api_base=OLLAMA_API_BASE,
-    api_key=OLLAMA_API_KEY
+    api_base=TEXT_API_BASE,
+    api_key=TEXT_API_KEY,
+    # Nur setzen, wenn konfiguriert — sonst bleibt der lokale Ollama-Aufruf unverändert.
+    **({"extra_body": MODEL_EXTRA_BODY} if MODEL_EXTRA_BODY else {}),
 )
+print(f"[config] text model: {TEXT_MODEL_ID} via {TEXT_API_BASE}")
+if MODEL_EXTRA_BODY:
+    print(f"[config] extra_body: {MODEL_EXTRA_BODY}")
 
 # --- Subagent: analyzes product photos only ---
 vision_agent = ToolCallingAgent(

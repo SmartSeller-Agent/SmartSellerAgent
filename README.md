@@ -108,6 +108,33 @@ Compose itself, since inside the network the runtime is reached as `ollama`, not
 `localhost`. Without `.env` the defaults from [`docker-compose.yml`](docker-compose.yml)
 apply and the stack still runs (tracing is then simply skipped).
 
+### Option A2 — Docker with hosted models (OpenRouter)
+
+Same containers, but the models run at OpenRouter instead of in a local `ollama`
+container. Nothing is downloaded and nothing runs on the CPU, so a full agent run
+takes minutes instead of tens of minutes.
+
+```bash
+docker compose -f docker-compose.openrouter.yml up --build
+```
+
+Requires `OPENROUTER_API_KEY` in `.env` (see [.env.example](.env.example)); the
+stack refuses to start with a clear error if it is missing. The models used are
+`OPENROUTER_TEXT_MODEL` and `OPENROUTER_VISION_MODEL` — kept separate from the
+local model ids so switching modes needs no edit to `.env`.
+
+The URLs are the same as above (8501 for the UI, 8000 for the API). Run only one
+of the two stacks at a time; both use the same container names, so stop the other
+with `docker compose down` first.
+
+| | Option A (local) | Option A2 (OpenRouter) |
+|---|---|---|
+| Setup | none, self-contained | API key with credit |
+| First start | several GB downloaded | immediate |
+| Speed | slow (CPU inference) | fast |
+| Data | stays on the machine | sent to the provider |
+| Cost | none | pay per token |
+
 ### Option B — locally with `uv`
 
 Requires a running Ollama on the host with the models from `.env` already pulled.
@@ -131,7 +158,7 @@ The system is built on the principles of a Service-Oriented Architecture (SOA) a
 *   **Multi-Agent-System (smolagents):**
     *   **Orchestrator:** The main agent that controls the workflow and has access to the WebSearch and Pricing tools.
     *   **Vision-Agent:** A sub-agent exclusively responsible for the visual analysis of the product images.
-*   **Models (Ollama):** The local execution of the LLMs ensures data privacy and independence from cloud costs.
+*   **Models:** Configurable per deployment. In the default setup the LLMs run locally in an Ollama container, which keeps the data on the machine and avoids cloud costs at the price of speed. Alternatively the same containers can be pointed at a hosted provider (OpenRouter) — much faster, but the requests including the product photos then leave the machine. Text and vision model are configured separately and may sit at different providers.
 
 ## How to Run
 The system consists of two independent components that need to be started in separate terminals.
