@@ -47,11 +47,14 @@ def test_analyze_product_image_returns_api_response_content(monkeypatch, tmp_pat
         def json(self):
             return {"choices": [{"message": {"content": "IKEA Kallax"}}]}
 
-    def fake_post(url, json, headers):
+    def fake_post(url, json, headers, timeout):
         assert url.endswith("/chat/completions")
         assert headers["Authorization"] == "Bearer test-key"
         assert json["model"] == "test-model"
         assert json["messages"][0]["content"][1]["text"].startswith("Du bist")
+        # The call must never be able to hang forever — relevant since the
+        # provider can be a remote API, not just a local Ollama.
+        assert timeout is not None
         return FakeResponse()
 
     # Replaces the real configurations with our fake data for this test
@@ -75,7 +78,7 @@ def test_analyze_product_image_returns_error_on_http_failure(monkeypatch, tmp_pa
         def raise_for_status(self):
             raise requests.HTTPError("boom")
 
-    def fake_post(url, json, headers):
+    def fake_post(url, json, headers, timeout):
         return FakeResponse()
 
     monkeypatch.setattr(vision.requests, "post", fake_post)

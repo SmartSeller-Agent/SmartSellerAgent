@@ -1,8 +1,14 @@
 import base64
 import mimetypes
+import os
 import requests
 from smolagents import tool
 from src.config import VISION_MODEL_ID, VISION_API_BASE, VISION_API_KEY
+
+# (connect, read) in Sekunden. Ein gehosteter Provider antwortet in Sekunden,
+# lokale CPU-Inferenz kann Minuten brauchen — der Lesetimeout ist deshalb
+# großzügig. Er verhindert aber, dass ein Aufruf unbegrenzt hängen bleibt.
+_TIMEOUT = (10, int(os.getenv("VISION_TIMEOUT_S", "600")))
 
 @tool
 def analyze_product_image(image_path: str) -> str:
@@ -39,13 +45,26 @@ def analyze_product_image(image_path: str) -> str:
             ],
         }
 
+        headers = {"Authorization": f"Bearer {VISION_API_KEY}"}
+        if "openrouter.ai" in VISION_API_BASE:
+            # Von OpenRouter empfohlen: ordnet die Nutzung im Dashboard dieser App zu.
+            headers["HTTP-Referer"] = "https://github.com/SmartSeller-Agent/SmartSellerAgent"
+            headers["X-Title"] = "SmartSellerAgent"
+
         response = requests.post(
             f"{VISION_API_BASE}/chat/completions",
             json=payload,
-            headers={"Authorization": f"Bearer {VISION_API_KEY}"},
+            headers=headers,
+            timeout=_TIMEOUT,
         )
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
 
+    except requests.HTTPError as e:
+        # Antworttext mitgeben, sofern vorhanden — Provider erklären hier, was
+        # falsch war (falsches Modell-Slug, kein Guthaben, ungültiger Key).
+        body = getattr(getattr(e, "response", None), "text", "") or ""
+        detail = f" — {body[:300]}" if body else ""
+        return f"Fehler bei der Bildanalyse: {e}{detail}"
     except Exception as e:
         return f"Fehler bei der Bildanalyse: {str(e)}"

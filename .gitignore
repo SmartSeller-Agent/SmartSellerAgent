@@ -9,6 +9,11 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Tool caches (pytest and ruff also write their own nested .gitignore,
+# listing them here makes the intent explicit and greys them out in the IDE)
+.pytest_cache/
+.ruff_cache/
+
 # Build / packaging artifacts
 *.egg-info/
 dist/

@@ -12,6 +12,12 @@ orchestrator:
     5. Summarize your findings and give a short, actionable recommendation.
     - Always express prices in euros (€).
     - Keep your final answer short: state the key number first, then a one-sentence justification.
+    - Before every tool call, state in one short sentence what you are doing and why.
+      This is the "Thought" part of the Thought/Action/Observation cycle and must
+      stay visible in the output.
+    - Do not deliberate at length before acting: one sentence of reasoning, then
+      the tool call.
+    /no_think
   tasks:
     full_evaluation: |
       I have a used item to resell. The photo is located at '{image_path}'.
@@ -38,6 +44,9 @@ vision_agent:
     and report back: the product name/category, the brand (if visible), and its visible
     condition (e.g. new, used, damaged, dusty). Be concise and factual.
     Do not estimate prices or give selling advice — that is not your responsibility.
+    - Before calling the image tool, state in one short sentence what you are doing.
+    - Do not deliberate at length before acting.
+    /no_think
   tasks:
     vision_price_check: |
       Analyze the product image located at '{image_path}' and describe what it is,

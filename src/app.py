@@ -7,10 +7,10 @@ from pydantic import BaseModel
 from typing import Optional
 
 # Imports: Agents
-from smolagents import ToolCallingAgent, OpenAIServerModel, DuckDuckGoSearchTool
+from smolagents import ToolCallingAgent, OpenAIServerModel, DuckDuckGoSearchTool, LogLevel
 
 # Imports: Config, API Keys
-from src.config import OLLAMA_API_BASE, OLLAMA_API_KEY, TEXT_MODEL_ID
+from src.config import TEXT_API_BASE, TEXT_API_KEY, TEXT_MODEL_ID, MODEL_EXTRA_BODY
 
 # Imports: Tracing, Logging
 from src.tracing import setup_tracing
@@ -46,9 +46,14 @@ pricing_tool = calculate_margin
 
 model = OpenAIServerModel(
     model_id=TEXT_MODEL_ID,
-    api_base=OLLAMA_API_BASE,
-    api_key=OLLAMA_API_KEY
+    api_base=TEXT_API_BASE,
+    api_key=TEXT_API_KEY,
+    # Nur setzen, wenn konfiguriert — sonst bleibt der lokale Ollama-Aufruf unverändert.
+    **({"extra_body": MODEL_EXTRA_BODY} if MODEL_EXTRA_BODY else {}),
 )
+print(f"[config] text model: {TEXT_MODEL_ID} via {TEXT_API_BASE}")
+if MODEL_EXTRA_BODY:
+    print(f"[config] extra_body: {MODEL_EXTRA_BODY}")
 
 # --- Subagent: analyzes product photos only ---
 vision_agent = ToolCallingAgent(
@@ -56,6 +61,9 @@ vision_agent = ToolCallingAgent(
     model=model,
     instructions=_prompts["vision_agent"]["instructions"],
     max_steps=4,
+    # P2: DEBUG also logs "Output message of the LLM" — the Thought part of the
+    # TAO cycle. At the default INFO level only Action and Observation appear.
+    verbosity_level=LogLevel.DEBUG,
     name="vision_agent",
     description=(
         "Analyzes a product photo and reports back what the item is: "
@@ -72,6 +80,8 @@ orchestrator = ToolCallingAgent(
     managed_agents=[vision_agent],
     instructions=_prompts["orchestrator"]["instructions"],
     max_steps=10,
+    # P2: see vision_agent above — DEBUG makes the Thought visible in the logs.
+    verbosity_level=LogLevel.DEBUG,
     name="orchestrator",
     description="Coordinates the end-to-end resale evaluation: image analysis, price research, margin calculation and recommendation.",
 )
