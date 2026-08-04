@@ -1,4 +1,5 @@
 # -------------------------- Imports --------------------------
+from contextlib import asynccontextmanager
 from pathlib import Path
 import yaml
 from fastapi import FastAPI, HTTPException
@@ -77,7 +78,19 @@ orchestrator = ToolCallingAgent(
 
 
 # -------------------------- FastAPI Setup --------------------------
-api = FastAPI(title="SmartSeller Agent API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Flush pending traces when the server shuts down.
+
+    Spans are exported in batches from a background thread, so whatever is still
+    queued when the process stops would be lost without this. shutdown() drains
+    the queue and waits for the export to finish.
+    """
+    yield
+    tracer_provider.shutdown()
+
+
+api = FastAPI(title="SmartSeller Agent API", lifespan=lifespan)
 
 # Erweitertes Request-Modell: Erlaubt optionale Übergabe von Bildpfad und Preis
 class TaskRequest(BaseModel):

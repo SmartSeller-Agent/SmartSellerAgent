@@ -99,6 +99,11 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      # Set to true to log every span export to stdout (noisy, debugging only)
+      OTEL_DEBUG_EXPORT: ${OTEL_DEBUG_EXPORT:-}
+    # Spans are exported in batches, so the container needs time on SIGTERM to
+    # flush what is still queued. Docker's default of 10s can cut that short.
+    stop_grace_period: 30s
     volumes:
       # Shared with the frontend: it writes the uploaded image here and passes
       # the path to /run-task, so both containers must see the same directory.
