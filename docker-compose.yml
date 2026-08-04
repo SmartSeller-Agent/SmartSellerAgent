@@ -1,0 +1,145 @@
+# SmartSellerAgent — full stack (W6: prediction service, W7: containerisation, W11: /health)
+#
+#   docker compose up --build
+#
+# Starts four services:
+#   ollama       — local LLM runtime serving the text and vision models
+#   ollama-init  — one-shot job that pulls the required models, then exits
+#   api          — FastAPI backend (src/app.py:api)   -> http://localhost:8000
+#   frontend     — Streamlit UI (frontend.py)         -> http://localhost:8501
+#
+# api and frontend run from the same image, they only differ in their command.
+#
+# Values are read from .env when present (see .env.example); the defaults
+# below keep the stack runnable without any local configuration.
+
+services:
+  # ------------------------------------------------------------------
+  # LLM runtime — replaces the "Ollama on localhost" setup of the local dev flow
+  # ------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: smartseller-ollama
+    volumes:
+      # Named volume so pulled models survive `docker compose down`
+      - ollama-models:/root/.ollama
+    # Not published by default: port 11434 is usually taken by a locally
+    # installed Ollama. Uncomment to inspect the containerised one from the host.
+    # ports:
+    #   - "11435:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    # --- Optional: NVIDIA GPU acceleration -------------------------------
+    # Without this the models run on CPU, which is slow for larger models.
+    # Requires the NVIDIA Container Toolkit on the host.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ------------------------------------------------------------------
+  # One-shot model puller — makes `docker compose up` self-contained
+  # ------------------------------------------------------------------
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: smartseller-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      # Talks to the ollama service instead of its own local instance
+      OLLAMA_HOST: http://ollama:11434
+      TEXT_MODEL_ID: ${TEXT_MODEL_ID:-qwen3:1.7b}
+      VISION_MODEL_ID: ${VISION_MODEL_ID:-llava}
+    # The ollama image starts the server by default — override it to run pulls.
+    entrypoint: ["/bin/sh", "-c"]
+    # $$ escapes the variable so Compose passes it through to the shell,
+    # where it is resolved against the environment block above.
+    command: >
+      'echo "[init] pulling text model: $${TEXT_MODEL_ID}" &&
+       ollama pull "$${TEXT_MODEL_ID}" &&
+       echo "[init] pulling vision model: $${VISION_MODEL_ID}" &&
+       ollama pull "$${VISION_MODEL_ID}" &&
+       echo "[init] all models ready"'
+    restart: "no"
+
+  # ------------------------------------------------------------------
+  # FastAPI backend — the prediction service (W6)
+  # ------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: smartselleragent:latest
+    container_name: smartseller-api
+    depends_on:
+      ollama-init:
+        # Waits for the pulls to finish successfully before starting
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    environment:
+      # Inside the compose network the runtime is reachable by service name,
+      # so these deliberately override any localhost value coming from .env.
+      OLLAMA_API_BASE: http://ollama:11434/v1
+      VISION_API_BASE: http://ollama:11434/v1
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-ollama}
+      VISION_API_KEY: ${VISION_API_KEY:-ollama}
+      TEXT_MODEL_ID: ${TEXT_MODEL_ID:-qwen3:1.7b}
+      VISION_MODEL_ID: ${VISION_MODEL_ID:-llava}
+      # Observability (W5) — optional, tracing is skipped when keys are empty
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+    volumes:
+      # Shared with the frontend: it writes the uploaded image here and passes
+      # the path to /run-task, so both containers must see the same directory.
+      - uploads:/app/test/images/uploads
+    # W11: the /health route doubles as the container healthcheck
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
+  # Streamlit frontend — same image as api, different command
+  # ------------------------------------------------------------------
+  frontend:
+    image: smartselleragent:latest
+    container_name: smartseller-frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    environment:
+      # 127.0.0.1 would be the frontend container itself — talk to the api service
+      API_BASE_URL: http://api:8000
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+    volumes:
+      - uploads:/app/test/images/uploads
+    command:
+      - streamlit
+      - run
+      - frontend.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      # No browser to open inside a container, and skips the first-run e-mail prompt
+      - --server.headless=true
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
+  uploads:

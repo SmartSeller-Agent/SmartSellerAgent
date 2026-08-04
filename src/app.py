@@ -1,7 +1,9 @@
-
 # -------------------------- Imports --------------------------
 from pathlib import Path
 import yaml
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 
 # Imports: Agents
 from smolagents import ToolCallingAgent, OpenAIServerModel, DuckDuckGoSearchTool
@@ -23,7 +25,7 @@ from src.tools.pricing import calculate_margin
 # setup tracing
 tracer_provider = setup_tracing()
 
-# Calculate the absolute path relative to this file
+# Absoluten Pfad relativ zu dieser Datei berechnen
 _project_root = Path(__file__).parent.parent  # src/ -> Projektstamm
 _image_path = _project_root / "test" / "images" / "Kallax4x4_leer.png"
 
@@ -73,24 +75,60 @@ orchestrator = ToolCallingAgent(
     description="Coordinates the end-to-end resale evaluation: image analysis, price research, margin calculation and recommendation.",
 )
 
-# Build the task: full multi-agent workflow over the sample image
-task = _prompts["orchestrator"]["tasks"]["full_evaluation"].format(
-    image_path=_image_path,
-    purchase_price=20,
-)
+
+# -------------------------- FastAPI Setup --------------------------
+api = FastAPI(title="SmartSeller Agent API")
+
+# Erweitertes Request-Modell: Erlaubt optionale Übergabe von Bildpfad und Preis
+class TaskRequest(BaseModel):
+    task_name: str  
+    image_path: Optional[str] = str(_image_path)
+    purchase_price: Optional[float] = 20.0
+
+@api.get("/health")
+def health_check():
+    return {"status": "ok", "message": "Der SmartSeller Agent läuft!"}
+
+@api.post("/run-task")
+def run_agent_task(request: TaskRequest):
+    # 1. Prompt dynamisch suchen (unterstützt deine neuen Tasks UND die vom Partner)
+    task_prompt_template = None
+    if "tasks" in _prompts and request.task_name in _prompts["tasks"]:
+        task_prompt_template = _prompts["tasks"][request.task_name]
+    elif "orchestrator" in _prompts and "tasks" in _prompts["orchestrator"] and request.task_name in _prompts["orchestrator"]["tasks"]:
+        task_prompt_template = _prompts["orchestrator"]["tasks"][request.task_name]
+        
+    if not task_prompt_template:
+        raise HTTPException(status_code=404, detail=f"Task '{request.task_name}' nicht gefunden.")
+    
+    # 2. Den gefundenen Prompt mit Variablen füllen (z.B. dem Bildpfad)
+    try:
+        final_task = task_prompt_template.format(
+            image_path=request.image_path,
+            purchase_price=request.purchase_price
+        )
+    except KeyError:
+        # Falls der Prompt keine Platzhalter {} hat (wie z.B. dein create_listing)
+        final_task = task_prompt_template 
+
+    try:
+        # 3. Das Multi-Agent-System (orchestrator) mit dem fertigen Task starten
+        result = orchestrator.run(final_task)
+        return {"task": request.task_name, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 def main():
-    print("Smart Seller Agent is starting the evaluation... This may take a moment.")
-    try:
-        result = orchestrator.run(task)
-        print("\n--- Agent's result ---")
-        print(result)
-    finally:
-        tracer_provider.shutdown()  # flushes all buffered spans before exit
+    """Console-script entry point (`uv run smartselleragent`) — serves the API.
+
+    The container does not use this: it runs the uvicorn CLI directly and binds
+    to 0.0.0.0 so the port can be published (see Dockerfile / docker-compose.yml).
+    """
+    import uvicorn
+
+    uvicorn.run(api, host="127.0.0.1", port=8000)
+
 
 if __name__ == "__main__":
     main()
-
-# Ausgabe: Auf Kleinazeigen liegt der Preis so bei 80 € VB.
-#--- Ergebnis des Agenten ---
-# Der durchschnittliche Preis für einen gebrauchten IKEA Kallax Regal 4x4 beträgt etwa 86 €.
