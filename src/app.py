@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 # Imports: Agents
-from smolagents import ToolCallingAgent, OpenAIServerModel, DuckDuckGoSearchTool
+from smolagents import ToolCallingAgent, OpenAIServerModel, DuckDuckGoSearchTool, LogLevel
 
 # Imports: Config, API Keys
 from src.config import TEXT_API_BASE, TEXT_API_KEY, TEXT_MODEL_ID, MODEL_EXTRA_BODY
@@ -61,6 +61,9 @@ vision_agent = ToolCallingAgent(
     model=model,
     instructions=_prompts["vision_agent"]["instructions"],
     max_steps=4,
+    # P2: DEBUG also logs "Output message of the LLM" — the Thought part of the
+    # TAO cycle. At the default INFO level only Action and Observation appear.
+    verbosity_level=LogLevel.DEBUG,
     name="vision_agent",
     description=(
         "Analyzes a product photo and reports back what the item is: "
@@ -77,6 +80,8 @@ orchestrator = ToolCallingAgent(
     managed_agents=[vision_agent],
     instructions=_prompts["orchestrator"]["instructions"],
     max_steps=10,
+    # P2: see vision_agent above — DEBUG makes the Thought visible in the logs.
+    verbosity_level=LogLevel.DEBUG,
     name="orchestrator",
     description="Coordinates the end-to-end resale evaluation: image analysis, price research, margin calculation and recommendation.",
 )
