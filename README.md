@@ -127,6 +127,21 @@ The URLs are the same as above (8501 for the UI, 8000 for the API). Run only one
 of the two stacks at a time; both use the same container names, so stop the other
 with `docker compose down` first.
 
+**Selecting the mode once instead of per command.** Compose reads `COMPOSE_FILE`
+from `.env`, so a single line there makes plain `docker compose up` use the hosted
+stack:
+
+```bash
+# in .env
+COMPOSE_FILE=docker-compose.openrouter.yml
+```
+
+With that line, every `docker compose` command in this project targets the hosted
+stack — `up`, `down`, `logs`, all of them, without `-f`. Remove or comment it out
+to go back to local. Left unset (the default in
+[.env.example](.env.example)), `docker compose up` starts the local stack, which
+is why the project still comes up with no configuration at all.
+
 | | Option A (local) | Option A2 (OpenRouter) |
 |---|---|---|
 | Setup | none, self-contained | API key with credit |
