@@ -16,3 +16,6 @@ VISION_API_KEY  = os.getenv("VISION_API_KEY", OLLAMA_API_KEY)
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_HOST       = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+# Prints every span export to stdout. Debugging aid, off by default — it adds
+# console I/O to the export path.
+OTEL_DEBUG_EXPORT   = os.getenv("OTEL_DEBUG_EXPORT", "").lower() in ("1", "true", "yes")
