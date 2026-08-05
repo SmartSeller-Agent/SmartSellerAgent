@@ -16,6 +16,10 @@ dependencies = [
     "duckduckgo-search>=8.1.1",
     "langfuse>=4.7.1",
     "openai>=2.41.0",
+    # Browser-Automatisierung für die Kleinanzeigen-Veröffentlichung.
+    # Das Paket allein genügt für die Tests; die Chromium-Binaries holt
+    # `playwright install chromium` (im Image ein eigener Build-Schritt).
+    "playwright>=1.58.0",
     "requests>=2.34.2",
     "smolagents[toolkit,telemetry]>=1.26.0",
     "opentelemetry-sdk>=1.20.0",

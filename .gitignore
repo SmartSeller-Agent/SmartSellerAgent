@@ -1,6 +1,11 @@
 # API Keys env files
 .env
 
+# Marketplace browser session — these cookies ARE the login to the account.
+.state/
+*_session.json
+screenshots/
+
 # Python virtual environment
 .venv/
 
@@ -24,3 +29,6 @@ build/
 
 # test images
 test/images/uploads/*
+
+# further testing stuff
+tmp_*/
