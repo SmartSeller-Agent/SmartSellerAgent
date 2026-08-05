@@ -112,7 +112,7 @@ The four services:
 | `ollama`      | Local LLM runtime, serves the text and vision models inside the compose network  |
 | `ollama-init` | One-shot job: pulls `TEXT_MODEL_ID` and `VISION_MODEL_ID`, then exits             |
 | `api`         | FastAPI backend ([`src/app.py`](src/app.py)) with the multi-agent system          |
-| `frontend`    | Streamlit UI ([`frontend.py`](frontend.py))                                       |
+| `frontend`    | Streamlit UI ([`src/frontend.py`](src/frontend.py))                               |
 
 The startup order is enforced by Compose: `ollama` must pass its healthcheck, then
 `ollama-init` must finish pulling the models, then `api` starts and must answer on

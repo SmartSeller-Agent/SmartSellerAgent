@@ -17,6 +17,7 @@ import json
 import re
 import time
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -109,6 +110,22 @@ class FakeLocator:
         self.page.uploaded = list(paths)
 
 
+class FakeContext:
+    """Nur für storage_state — das ist alles, was der Anmeldeablauf braucht."""
+
+    def __init__(self):
+        self.saved_to = None
+
+    def storage_state(self, path):
+        self.saved_to = path
+        Path(path).write_text(
+            json.dumps(
+                {"cookies": [{"name": "auth", "expires": time.time() + 3600}], "origins": []}
+            ),
+            encoding="utf-8",
+        )
+
+
 class FakePage:
     """Zeichnet auf, was das Formular getan hätte."""
 
@@ -121,6 +138,7 @@ class FakePage:
         overwrites=None,
         logged_in=True,
         shows_logout_link=True,
+        completes_login_after=None,
     ):
         self.categories = DEFAULT_CATEGORIES if categories is None else list(categories)
         self.has_shipping = has_shipping
@@ -131,6 +149,11 @@ class FakePage:
         # Ohne gültige Anmeldung leitet die Website auf die Loginseite um.
         self.logged_in = logged_in
         self.shows_logout_link = shows_logout_link
+        # Nach so vielen Warterunden hat der Mensch die Anmeldung abgeschlossen.
+        # None heisst: er kommt nie zurueck.
+        self.completes_login_after = completes_login_after
+        self.polls = 0
+        self.context = FakeContext()
 
         self.filled = {}
         self.clicked = []
@@ -143,10 +166,31 @@ class FakePage:
         self.price_type = "Festpreis"
         # Vorbelegung wie im echten Formular.
         self.checked = {"ad-type-OFFER", "ad-shipping-enabled-yes"}
-        self.url = "about:blank"
+        self._url = "about:blank"
         self.confirm_url = (
             "https://www.kleinanzeigen.de/p-anzeige-aufgeben-bestaetigung.html?adId=1234"
         )
+
+    # -- Anmeldezustand --------------------------------------------------
+    def _login_completed(self):
+        return (
+            self.completes_login_after is not None
+            and self.polls >= self.completes_login_after
+        )
+
+    @property
+    def url(self):
+        # Nach erfolgreicher Anmeldung verlässt die Seite die Loginadresse.
+        if marketplace._is_login_page(self._url) and self._login_completed():
+            return marketplace.MY_ADS_URL
+        return self._url
+
+    @url.setter
+    def url(self, value):
+        self._url = value
+
+    def _shows_logout(self):
+        return (self.logged_in and self.shows_logout_link) or self._login_completed()
 
     # -- Auflösung -------------------------------------------------------
     @staticmethod
@@ -194,7 +238,7 @@ class FakePage:
         if selector.startswith(_PRICE_OPTIONS):
             return len(_PRICE_TYPE_ORDER) if self.menu_open else 0
         if selector == "text=Ausloggen":
-            return 1 if self.logged_in and self.shows_logout_link else 0
+            return 1 if self._shows_logout() else 0
         return 0 if selector in self.missing else 1
 
     def text_of(self, selector):
@@ -246,7 +290,11 @@ class FakePage:
     # -- Playwright-Oberfläche -------------------------------------------
     def goto(self, url):
         self.visited.append(url)
-        self.url = url if self.logged_in else "https://www.kleinanzeigen.de/m-einloggen.html"
+        # Ohne gültige Anmeldung landet man auf dem separaten Anmeldedienst,
+        # nicht auf www.kleinanzeigen.de.
+        self.url = url if self.logged_in else self.login_redirect
+
+    login_redirect = "https://login.kleinanzeigen.de/u/login/identifier?state=abc"
 
     def locator(self, selector):
         return FakeLocator(self, selector)
@@ -258,7 +306,7 @@ class FakePage:
         self.screenshots.append(path)
 
     def wait_for_timeout(self, _ms):
-        pass
+        self.polls += 1
 
     def wait_for_load_state(self, _state, **_kwargs):
         pass
@@ -704,12 +752,17 @@ def test_require_session_distinguishes_missing_from_expired(session_file):
 # --------------------------------------------------------------------------
 @pytest.fixture
 def use_fake_browser(monkeypatch):
+    """Ersetzt den Browser und merkt sich, wie er angefordert wurde."""
+    calls = []
+
     def install(page):
         @contextmanager
-        def fake_browser_page():
+        def fake_browser_page(use_session=True):
+            calls.append(use_session)
             yield page
 
         monkeypatch.setattr(marketplace, "_browser_page", fake_browser_page)
+        page.browser_calls = calls
         return page
 
     return install
@@ -723,6 +776,23 @@ def test_redirect_to_login_aborts_the_form_immediately(listing):
         marketplace.fill_offer_form(page, listing, dry_run=True)
 
     assert page.filled == {}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.kleinanzeigen.de/m-einloggen.html",
+        # Der eigentliche Anmeldedienst liegt auf einer anderen Domain — nur
+        # auf den ersten Namen zu prüfen, ginge daran vorbei.
+        "https://login.kleinanzeigen.de/u/login/identifier?state=hKFo2SBKbTl",
+    ],
+)
+def test_both_login_addresses_count_as_not_logged_in(url):
+    assert marketplace._is_login_page(url) is True
+
+
+def test_the_offer_form_is_not_mistaken_for_a_login_page():
+    assert marketplace._is_login_page(marketplace.OFFER_FORM_URL) is False
 
 
 def test_online_check_accepts_a_valid_session(use_fake_browser):
@@ -773,6 +843,105 @@ def test_session_tool_confirms_a_working_session(session_file, use_fake_browser)
 
     assert "Sitzung ist gültig" in result
     assert "Cookies: 1 gültig" in result
+
+
+# --------------------------------------------------------------------------
+# Rückfall: Anmeldung von anderswo übernehmen
+# --------------------------------------------------------------------------
+def test_import_takes_over_a_valid_session(session_file, tmp_path):
+    source = _write_session(
+        tmp_path / "von-woanders.json", [{"name": "auth", "expires": time.time() + 3600}]
+    )
+
+    status = marketplace.import_session(source)
+
+    assert status.usable is True
+    assert session_file.read_bytes() == source.read_bytes()
+
+
+def test_import_refuses_an_expired_file_without_touching_the_current_one(
+    session_file, tmp_path
+):
+    """Eine tote Datei darf keine noch funktionierende Anmeldung verdrängen."""
+    _write_session(session_file, [{"name": "auth", "expires": time.time() + 3600}])
+    before = session_file.read_bytes()
+    source = _write_session(
+        tmp_path / "alt.json", [{"name": "auth", "expires": time.time() - 1}]
+    )
+
+    with pytest.raises(SessionExpiredError):
+        marketplace.import_session(source)
+
+    assert session_file.read_bytes() == before
+
+
+def test_import_refuses_a_file_that_is_not_a_session(session_file, tmp_path):
+    source = tmp_path / "urlaubsfoto.json"
+    source.write_text("kein json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="keine gültige Anmeldung"):
+        marketplace.import_session(source)
+
+    assert not session_file.exists()
+
+
+def test_import_reports_a_missing_file(session_file, tmp_path):
+    with pytest.raises(SessionMissingError):
+        marketplace.import_session(tmp_path / "gibt-es-nicht.json")
+
+
+# --------------------------------------------------------------------------
+# Anmelden — manuell, weil Captcha und 2FA kein Skript lösen kann
+# --------------------------------------------------------------------------
+@pytest.fixture
+def visible_browser(monkeypatch):
+    """Ohne sichtbaren Browser lehnt die Anmeldung ab — hier tun wir so."""
+    monkeypatch.setattr(marketplace, "HEADLESS", False)
+
+
+def test_login_saves_the_session_once_the_user_is_done(
+    session_file, use_fake_browser, visible_browser
+):
+    page = use_fake_browser(
+        FakePage(logged_in=False, completes_login_after=2)
+    )
+
+    log = marketplace.login_interactive(timeout_s=10)
+
+    assert page.visited == [marketplace.LOGIN_URL]
+    assert page.context.saved_to == str(session_file)
+    assert marketplace.read_session_status().usable is True
+    assert any("Sitzung gespeichert" in line for line in log)
+
+
+def test_login_starts_from_a_clean_profile(session_file, use_fake_browser, visible_browser):
+    """Eine alte, ungültige Sitzung würde die neue Anmeldung nur stören."""
+    page = use_fake_browser(FakePage(logged_in=False, completes_login_after=1))
+
+    marketplace.login_interactive(timeout_s=10)
+
+    assert page.browser_calls == [False]
+
+
+def test_login_gives_up_without_saving_anything(
+    session_file, use_fake_browser, visible_browser
+):
+    # completes_login_after=None: der Mensch kommt nie zurück.
+    use_fake_browser(FakePage(logged_in=False))
+
+    with pytest.raises(TimeoutError, match="Nichts gespeichert"):
+        marketplace.login_interactive(timeout_s=3)
+
+    assert not session_file.exists()
+
+
+def test_login_refuses_when_there_is_nothing_to_look_at(monkeypatch, use_fake_browser):
+    """Headless würde fünf Minuten auf eine Eingabe warten, die niemand machen kann."""
+    monkeypatch.setattr(marketplace, "HEADLESS", True)
+    use_fake_browser(FakePage())
+
+    with pytest.raises(RuntimeError, match="sichtbaren Browser"):
+        marketplace.login_interactive(timeout_s=10)
 
 
 # --------------------------------------------------------------------------

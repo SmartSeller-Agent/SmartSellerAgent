@@ -29,6 +29,8 @@ services:
     container_name: smartseller-api
     ports:
       - "8000:8000"
+      # noVNC — see docker-compose.yml for why this is bound to 127.0.0.1.
+      - "127.0.0.1:6080:6080"
     environment:
       # Both models are OpenAI-protocol compatible, so only the base URL,
       # the key and the model id differ from the local setup.
@@ -51,7 +53,9 @@ services:
       # --- kleinanzeigen.de publishing ---------------------------------
       # Same settings as in docker-compose.yml; see there for the reasoning.
       KLEINANZEIGEN_STATE_DIR: /app/.state
-      KLEINANZEIGEN_HEADLESS: "true"
+      KLEINANZEIGEN_VNC: "true"
+      DISPLAY: ":99"
+      KLEINANZEIGEN_HEADLESS: "false"
       KLEINANZEIGEN_NO_SANDBOX: "true"
       # SAFETY SWITCH: unset means fill in the form but never submit it.
       KLEINANZEIGEN_ALLOW_PUBLISH: ${KLEINANZEIGEN_ALLOW_PUBLISH:-}
@@ -83,13 +87,16 @@ services:
       - "8501:8501"
     environment:
       API_BASE_URL: http://api:8000
+      # Points at the host, not into the compose network: the link is opened
+      # in the user's own browser.
+      VNC_URL: ${VNC_URL:-http://localhost:6080/vnc.html?autoconnect=1&resize=scale}
       STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
     volumes:
       - uploads:/app/test/images/uploads
     command:
       - streamlit
       - run
-      - frontend.py
+      - src/frontend.py
       - --server.address=0.0.0.0
       - --server.port=8501
       - --server.headless=true

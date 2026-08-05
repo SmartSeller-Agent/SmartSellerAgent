@@ -90,6 +90,16 @@ KLEINANZEIGEN_READY_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_READY_TIMEOUT_MS",
 KLEINANZEIGEN_SECTION_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_SECTION_TIMEOUT_MS", "20000"))
 KLEINANZEIGEN_CONFIRM_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_CONFIRM_TIMEOUT_MS", "15000"))
 
+# Wie lange die Anmeldung auf den Menschen wartet. Sie läuft bewusst manuell
+# ab: Captcha und Zwei-Faktor-Abfrage kann kein Skript lösen.
+KLEINANZEIGEN_LOGIN_TIMEOUT_S = int(os.getenv("KLEINANZEIGEN_LOGIN_TIMEOUT_S", "300"))
+
+# Ein frisch aufgesetzter Container hat weder Sprache noch Zeitzone. Ein
+# Browser, der sich als englischsprachig mit UTC meldet, während er von einer
+# deutschen Adresse aus eine deutsche Seite aufruft, fällt auf.
+KLEINANZEIGEN_LOCALE = os.getenv("KLEINANZEIGEN_LOCALE", "de-DE")
+KLEINANZEIGEN_TIMEZONE = os.getenv("KLEINANZEIGEN_TIMEZONE", "Europe/Berlin")
+
 # Configuration for langfuse and open telemetry
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")

@@ -6,7 +6,7 @@
 #   ollama       — local LLM runtime serving the text and vision models
 #   ollama-init  — one-shot job that pulls the required models, then exits
 #   api          — FastAPI backend (src/app.py:api)   -> http://localhost:8000
-#   frontend     — Streamlit UI (frontend.py)         -> http://localhost:8501
+#   frontend     — Streamlit UI (src/frontend.py)     -> http://localhost:8501
 #
 # api and frontend run from the same image, they only differ in their command.
 #
@@ -86,6 +86,10 @@ services:
         condition: service_completed_successfully
     ports:
       - "8000:8000"
+      # noVNC — watch the browser the agent drives. Bound to 127.0.0.1 on
+      # purpose: the view is unauthenticated, and whoever reaches it controls a
+      # browser that is logged into the marketplace account.
+      - "127.0.0.1:6080:6080"
     environment:
       # Inside the compose network the runtime is reachable by service name,
       # so these deliberately override any localhost value coming from .env.
@@ -104,8 +108,13 @@ services:
       # --- kleinanzeigen.de publishing ---------------------------------
       # The saved login lives on the volume mounted below, not in the image.
       KLEINANZEIGEN_STATE_DIR: /app/.state
-      # No X server in here, so this cannot be turned off.
-      KLEINANZEIGEN_HEADLESS: "true"
+      # Brings up the virtual screen and the noVNC bridge (docker/entrypoint.sh).
+      KLEINANZEIGEN_VNC: "true"
+      DISPLAY: ":99"
+      # Visible rather than headless — that is the whole point of the screen
+      # above. The manual login needs it, and it makes the agent's work
+      # watchable. Set both of these the same way or the browser will not start.
+      KLEINANZEIGEN_HEADLESS: "false"
       # Chromium's own sandbox needs privileges the unprivileged container user
       # does not have; the container is the isolation boundary instead.
       KLEINANZEIGEN_NO_SANDBOX: "true"
@@ -150,13 +159,16 @@ services:
     environment:
       # 127.0.0.1 would be the frontend container itself — talk to the api service
       API_BASE_URL: http://api:8000
+      # This one is the other way round: the link is opened in the user's own
+      # browser, so it has to point at the published port on the host.
+      VNC_URL: ${VNC_URL:-http://localhost:6080/vnc.html?autoconnect=1&resize=scale}
       STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
     volumes:
       - uploads:/app/test/images/uploads
     command:
       - streamlit
       - run
-      - frontend.py
+      - src/frontend.py
       - --server.address=0.0.0.0
       - --server.port=8501
       # No browser to open inside a container, and skips the first-run e-mail prompt

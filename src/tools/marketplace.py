@@ -51,6 +51,8 @@ from src.config import (
     KLEINANZEIGEN_CONFIRM_TIMEOUT_MS,
     KLEINANZEIGEN_FIELD_TIMEOUT_MS,
     KLEINANZEIGEN_HEADLESS,
+    KLEINANZEIGEN_LOCALE,
+    KLEINANZEIGEN_LOGIN_TIMEOUT_S,
     KLEINANZEIGEN_NO_SANDBOX,
     KLEINANZEIGEN_READY_TIMEOUT_MS,
     KLEINANZEIGEN_SCREENSHOT_DIR,
@@ -58,6 +60,7 @@ from src.config import (
     KLEINANZEIGEN_SESSION_FILE,
     KLEINANZEIGEN_SLOW_MO_MS,
     KLEINANZEIGEN_STATE_DIR,
+    KLEINANZEIGEN_TIMEZONE,
 )
 
 # Kurze Namen fürs Modul. Ein Alias statt eines zweiten Env-Zugriffs, damit die
@@ -68,18 +71,31 @@ SCREENSHOT_DIR = KLEINANZEIGEN_SCREENSHOT_DIR
 HEADLESS = KLEINANZEIGEN_HEADLESS
 SLOW_MO_MS = KLEINANZEIGEN_SLOW_MO_MS
 NO_SANDBOX = KLEINANZEIGEN_NO_SANDBOX
+LOGIN_TIMEOUT_S = KLEINANZEIGEN_LOGIN_TIMEOUT_S
+LOCALE = KLEINANZEIGEN_LOCALE
+TIMEZONE = KLEINANZEIGEN_TIMEZONE
 FIELD_TIMEOUT_MS = KLEINANZEIGEN_FIELD_TIMEOUT_MS
 READY_TIMEOUT_MS = KLEINANZEIGEN_READY_TIMEOUT_MS
 SECTION_TIMEOUT_MS = KLEINANZEIGEN_SECTION_TIMEOUT_MS
 CONFIRM_TIMEOUT_MS = KLEINANZEIGEN_CONFIRM_TIMEOUT_MS
 
+LOGIN_URL = "https://www.kleinanzeigen.de/m-einloggen.html"
 OFFER_FORM_URL = "https://www.kleinanzeigen.de/p-anzeige-aufgeben-schritt2.html"
 CONFIRM_URL_GLOB = "https://www.kleinanzeigen.de/p-anzeige-aufgeben-bestaetigung.html**"
 MY_ADS_URL = "https://www.kleinanzeigen.de/m-meine-anzeigen.html"
 
-# Ohne gültige Anmeldung leitet die Website auf die Loginseite um. Das ist das
+# Ohne gültige Anmeldung leitet die Website auf die Anmeldung um. Das ist das
 # verlässlichste Signal — verlässlicher als ein Selektor, der sich ändern kann.
-LOGIN_URL_MARKER = "m-einloggen"
+#
+# Zwei Adressen, weil /m-einloggen.html nur die Einstiegsseite ist: von dort
+# geht es auf einen eigenen Anmeldedienst unter login.kleinanzeigen.de weiter.
+# Nur auf den ersten Namen zu prüfen, ginge an genau der Seite vorbei, auf der
+# man am Ende landet.
+LOGIN_URL_MARKERS = ("m-einloggen", "login.kleinanzeigen.de")
+
+
+def _is_login_page(url: str) -> bool:
+    return any(marker in url for marker in LOGIN_URL_MARKERS)
 
 # Titellänge laut Formular. Im ersten echten Testlauf gegenzuprüfen.
 MAX_TITLE_LEN = 65
@@ -180,6 +196,34 @@ def read_session_status(path: Optional[Path] = None) -> SessionStatus:
     )
 
 
+def import_session(source: Path) -> SessionStatus:
+    """Rückfall: übernimmt eine anderswo erzeugte Anmeldung.
+
+    Der vorgesehene Weg ist login_interactive() im sichtbaren Browser. Er kann
+    aber an Umständen scheitern, die nichts mit dem Code zu tun haben — etwa
+    wenn der Anbieter den Adressbereich des Containers vorübergehend sperrt.
+    Dann meldet man sich auf dem eigenen Rechner an und bringt nur das
+    Ergebnis hierher.
+
+    Geprüft wird vor dem Überschreiben, damit eine unbrauchbare Datei nicht
+    eine noch funktionierende Anmeldung verdrängt.
+    """
+    candidate = read_session_status(Path(source))
+
+    if not candidate.exists:
+        raise SessionMissingError(f"Datei nicht gefunden: {source}")
+    if candidate.error:
+        raise ValueError(f"Datei ist keine gültige Anmeldung: {candidate.error}")
+    if not candidate.usable:
+        raise SessionExpiredError(
+            f"Die Datei enthält keine gültigen Cookies mehr. {candidate.describe()}"
+        )
+
+    SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SESSION_FILE.write_bytes(Path(source).read_bytes())
+    return read_session_status()
+
+
 def require_session() -> SessionStatus:
     """Prüft vorab, damit nicht erst der Browser hochfährt und dann scheitert."""
     status = read_session_status()
@@ -199,7 +243,7 @@ def _ensure_logged_in(page) -> None:
     liefe der Ablauf in einen unverständlichen Timeout auf dem Titelfeld,
     weil auf der Loginseite schlicht kein Formular steht.
     """
-    if LOGIN_URL_MARKER in page.url:
+    if _is_login_page(page.url):
         raise SessionExpiredError(
             "Die Website hat auf die Anmeldeseite umgeleitet — die gespeicherte "
             f"Anmeldung ({SESSION_FILE}) gilt nicht mehr. Bitte neu anmelden."
@@ -652,12 +696,27 @@ def fill_offer_form(page, listing: Listing, dry_run: bool = True) -> List[str]:
 # Browser-Lebenszyklus
 # --------------------------------------------------------------------------
 @contextmanager
-def _browser_page():
-    """Browser mit gespeicherter Anmeldung, danach zuverlässig geschlossen."""
+def _browser_page(use_session: bool = True):
+    """Browser, danach zuverlässig geschlossen.
+
+    ``use_session=False`` startet mit einem leeren Profil — das ist der Fall
+    für eine neue Anmeldung, bei der eine alte, ungültige Sitzung nur stören
+    würde.
+    """
     from playwright.sync_api import sync_playwright
 
-    # Verhindert Berechtigungs-Blasen des Browsers über der Seite.
-    args = ["--disable-notifications", "--deny-permission-prompts"]
+    args = [
+        # Verhindert Berechtigungs-Blasen des Browsers über der Seite.
+        "--disable-notifications",
+        "--deny-permission-prompts",
+        # Ohne das meldet der Browser navigator.webdriver = true. Das ist das
+        # deutlichste Signal, an dem Schutzmechanismen einen ferngesteuerten
+        # Browser erkennen — und der Grund, warum die Sicherheitsabfrage bei
+        # der Anmeldung gar nicht erst zu Ende lädt. Gelöst wird die Abfrage
+        # weiterhin von Hand; hier geht es nur darum, nicht vorab
+        # aussortiert zu werden.
+        "--disable-blink-features=AutomationControlled",
+    ]
     if NO_SANDBOX:
         # Im Container startet Chromium sonst nicht: seine Sandbox verlangt
         # Rechte, die ein unprivilegierter Prozess dort nicht bekommt. Die
@@ -671,9 +730,17 @@ def _browser_page():
             args=args,
         )
         try:
-            context = browser.new_context(
-                storage_state=str(SESSION_FILE), no_viewport=True
-            )
+            # Sprache und Zeitzone setzen: ein Container hat von sich aus
+            # keine, und ein englischsprachiger Browser mit UTC auf einer
+            # deutschen Seite ist ein weiteres Merkmal, das auffällt.
+            options = {
+                "no_viewport": True,
+                "locale": LOCALE,
+                "timezone_id": TIMEZONE,
+            }
+            if use_session:
+                options["storage_state"] = str(SESSION_FILE)
+            context = browser.new_context(**options)
             yield context.new_page()
         finally:
             browser.close()
@@ -691,6 +758,73 @@ def publish_offer(listing: Listing, dry_run: bool = True) -> List[str]:
             raise
 
 
+# Wie oft nachgesehen wird, ob die Anmeldung inzwischen durch ist.
+_LOGIN_POLL_MS = 1000
+
+
+def _has_logout_link(page) -> bool:
+    """Den Abmelde-Link gibt es nur auf angemeldeten Seiten."""
+    return page.locator("text=Ausloggen").count() > 0
+
+
+def login_interactive(timeout_s: Optional[int] = None, notify=None) -> List[str]:
+    """Öffnet die Anmeldeseite und wartet, bis sich ein Mensch angemeldet hat.
+
+    Bewusst ohne Zugangsdaten: kleinanzeigen.de stellt bei automatisierten
+    Anmeldungen Captcha und Zwei-Faktor-Abfragen, die kein Skript löst. Ein
+    gespeichertes Passwort brächte deshalb nichts — es wäre nur ein weiteres
+    Geheimnis, das irgendwo liegen müsste. Gespeichert wird am Ende allein der
+    entstandene Sitzungszustand.
+
+    Setzt einen sichtbaren Browser voraus. Im Container liefert den der
+    virtuelle Bildschirm, den docker/entrypoint.sh startet.
+    """
+    timeout_s = timeout_s or LOGIN_TIMEOUT_S
+    log: List[str] = []
+
+    def say(message: str) -> None:
+        log.append(message)
+        if notify:
+            notify(message)
+
+    if HEADLESS:
+        raise RuntimeError(
+            "Die Anmeldung braucht einen sichtbaren Browser — headless gibt es "
+            "nichts zu bedienen. Im Container: KLEINANZEIGEN_VNC=true und "
+            "KLEINANZEIGEN_HEADLESS=false setzen (macht docker-compose bereits)."
+        )
+
+    with _browser_page(use_session=False) as page:
+        page.goto(LOGIN_URL)
+        try:
+            page.click("#gdpr-banner-accept", timeout=FIELD_TIMEOUT_MS)
+        except Exception:
+            pass
+
+        say(
+            f"Bitte im Browserfenster anmelden. Es wird bis zu {timeout_s} Sekunden "
+            "gewartet — Captcha und Zwei-Faktor-Abfrage gehören dazu."
+        )
+
+        # Über Runden statt Uhrzeit: so lässt sich der Ablauf testen, ohne
+        # wirklich Minuten zu warten.
+        for _ in range(max(1, timeout_s * 1000 // _LOGIN_POLL_MS)):
+            if not _is_login_page(page.url) and _has_logout_link(page):
+                SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+                page.context.storage_state(path=str(SESSION_FILE))
+                say(f"Angemeldet. Sitzung gespeichert unter {SESSION_FILE}.")
+                say(read_session_status().describe())
+                return log
+            page.wait_for_timeout(_LOGIN_POLL_MS)
+
+        _screenshot(page, "11_login_timeout.png")
+
+    raise TimeoutError(
+        f"Innerhalb von {timeout_s} Sekunden kam keine Anmeldung zustande. "
+        "Nichts gespeichert."
+    )
+
+
 def verify_session_online() -> List[str]:
     """Ruft eine geschützte Seite auf und schaut, ob die Anmeldung trägt.
 
@@ -702,7 +836,7 @@ def verify_session_online() -> List[str]:
 
     with _browser_page() as page:
         page.goto(MY_ADS_URL)
-        if LOGIN_URL_MARKER in page.url:
+        if _is_login_page(page.url):
             _screenshot(page, "10_session_rejected.png")
             raise SessionExpiredError(
                 "Die Website hat auf die Anmeldeseite umgeleitet — die Sitzung "
@@ -711,8 +845,7 @@ def verify_session_online() -> List[str]:
 
         _accept_cookies(page, log)
 
-        # Der Abmelde-Link steht nur auf angemeldeten Seiten.
-        if page.locator("text=Ausloggen").count() > 0:
+        if _has_logout_link(page):
             log.append("Angemeldet — die Sitzung ist gültig.")
             return log
 
@@ -819,6 +952,16 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Kleinanzeige ausfüllen und optional veröffentlichen")
     parser.add_argument(
+        "--login",
+        action="store_true",
+        help="Anmeldefenster öffnen und die Sitzung speichern (braucht einen sichtbaren Browser)",
+    )
+    parser.add_argument(
+        "--import-session",
+        metavar="DATEI",
+        help="Rückfall: eine auf einem anderen Rechner erzeugte Anmeldung übernehmen",
+    )
+    parser.add_argument(
         "--check-session",
         action="store_true",
         help="Nur die gespeicherte Anmeldung prüfen, keine Anzeige anlegen",
@@ -839,6 +982,16 @@ def main() -> None:
         help="Anzeige wirklich veröffentlichen (ohne diesen Schalter nur ausfüllen)",
     )
     args = parser.parse_args()
+
+    if args.login:
+        # notify=print, damit man den Fortschritt sieht, während der Browser
+        # noch offen ist — sonst käme die Ausgabe erst ganz am Ende.
+        login_interactive(notify=print)
+        return
+
+    if args.import_session:
+        print(import_session(Path(args.import_session)).describe())
+        return
 
     if args.check_session:
         status = read_session_status()

@@ -1,8 +1,10 @@
 # -------------------------- Imports --------------------------
 from contextlib import asynccontextmanager
 from pathlib import Path
+import shutil
+import tempfile
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from typing import Optional
 
@@ -21,6 +23,8 @@ logging.getLogger("urllib3").setLevel(logging.DEBUG)
 # Imports: Tools
 from src.tools.vision import analyze_product_image
 from src.tools.pricing import calculate_margin
+from src.tools import marketplace
+from src.login_job import LoginJob
 
 #-------------------------- Code --------------------------
 # setup tracing
@@ -140,6 +144,98 @@ def run_agent_task(request: TaskRequest):
         return {"task": request.task_name, "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------- Marktplatz-Anmeldung --------------------------
+# Die Anmeldung bei kleinanzeigen.de läuft bewusst von Hand ab: Captcha und
+# Zwei-Faktor-Abfrage kann kein Skript lösen. Der Container zeigt den Browser
+# dafür über noVNC an. Zugangsdaten nimmt die Anwendung nie entgegen.
+_login_job = LoginJob(marketplace.login_interactive)
+
+
+def _session_payload() -> dict:
+    status = marketplace.read_session_status()
+    return {
+        "exists": status.exists,
+        "usable": status.usable,
+        "description": status.describe(),
+        "saved_at": status.saved_at.isoformat() if status.saved_at else None,
+    }
+
+
+@api.get("/marketplace/session")
+def marketplace_session():
+    """Stand der gespeicherten Anmeldung — liest nur die Datei, startet nichts."""
+    return _session_payload()
+
+
+@api.post("/marketplace/session/verify")
+def marketplace_session_verify():
+    """Ruft eine geschützte Seite auf und schaut, ob die Anmeldung noch trägt.
+
+    Im Unterschied zu GET /marketplace/session startet das einen Browser und
+    dauert einige Sekunden. Nur so lässt sich eine serverseitig verworfene
+    Sitzung erkennen — die Ablaufzeiten in der Datei sehen dann noch gültig aus.
+    """
+    status = marketplace.read_session_status()
+    if not status.usable:
+        raise HTTPException(status_code=409, detail=status.describe())
+
+    try:
+        messages = marketplace.verify_session_online()
+    except marketplace.SessionExpiredError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    return {"messages": messages, "session": _session_payload()}
+
+
+@api.post("/marketplace/login")
+def marketplace_login_start():
+    """Öffnet das Anmeldefenster im Browser des Containers.
+
+    Kehrt sofort zurück; der Vorgang wartet danach minutenlang auf den
+    Menschen vor dem noVNC-Fenster.
+    """
+    # Vorab prüfen statt den Lauf erst im Thread scheitern zu lassen: ohne
+    # sichtbaren Browser gibt es nichts zu bedienen, und der Aufrufer soll das
+    # sofort erfahren.
+    if marketplace.HEADLESS:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Kein sichtbarer Browser. Im Container KLEINANZEIGEN_VNC=true und "
+                "KLEINANZEIGEN_HEADLESS=false setzen (docker-compose tut das bereits)."
+            ),
+        )
+    return _login_job.start().as_dict()
+
+
+@api.get("/marketplace/login")
+def marketplace_login_status():
+    """Fortschritt des laufenden Anmeldevorgangs."""
+    return {**_login_job.snapshot().as_dict(), "session": _session_payload()}
+
+
+@api.post("/marketplace/session/import")
+def marketplace_session_import(file: UploadFile = File(...)):
+    """Rückfall: eine anderswo erzeugte Anmeldung übernehmen.
+
+    Gedacht für den Fall, dass die Anmeldung im Container am Anbieter
+    scheitert. Die Datei wird erst geprüft und dann übernommen — eine
+    unbrauchbare darf keine funktionierende Anmeldung verdrängen.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        staged = Path(tmp.name)
+
+    try:
+        marketplace.import_session(staged)
+    except (marketplace.SessionMissingError, marketplace.SessionExpiredError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        staged.unlink(missing_ok=True)
+
+    return _session_payload()
 
 
 def main():
