@@ -9,6 +9,8 @@
 #   OpenRouter : https://openrouter.ai/api/v1
 import json
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -54,6 +56,31 @@ elif "openrouter.ai" in TEXT_API_BASE:
 else:
     # Lokales Ollama: nichts anhängen, Verhalten bleibt unverändert.
     MODEL_EXTRA_BODY = {}
+
+# --- Kleinanzeigen-Veröffentlichung (Browser-Automatisierung) --------------
+# Die Website hat keine API, deshalb steuert src/tools/marketplace.py einen
+# echten Browser. Die Anmeldung liegt als Playwright-storage_state auf Platte:
+# diese Datei enthält gültige Login-Cookies und gehört daher in ein Volume,
+# niemals ins Image und niemals ins Repository.
+KLEINANZEIGEN_STATE_DIR = Path(os.getenv("KLEINANZEIGEN_STATE_DIR", ".state"))
+KLEINANZEIGEN_SESSION_FILE = KLEINANZEIGEN_STATE_DIR / "kleinanzeigen_session.json"
+KLEINANZEIGEN_SCREENSHOT_DIR = Path(os.getenv("KLEINANZEIGEN_SCREENSHOT_DIR", "screenshots"))
+
+# Headless ist der Normalfall — im Container gibt es keinen X-Server.
+# Zum Zuschauen bei der Fehlersuche: KLEINANZEIGEN_HEADLESS=false
+KLEINANZEIGEN_HEADLESS = os.getenv("KLEINANZEIGEN_HEADLESS", "true").lower() not in (
+    "0", "false", "no",
+)
+KLEINANZEIGEN_SLOW_MO_MS = int(os.getenv("KLEINANZEIGEN_SLOW_MO_MS", "0"))
+
+# Auf ein vorhandenes Feld warten wir kurz; auf serverseitig nachgeladene
+# Abschnitte (Kategorievorschläge, Versand) und auf die Bestätigungsseite länger.
+KLEINANZEIGEN_FIELD_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_FIELD_TIMEOUT_MS", "5000"))
+# Wartezeit nach dem Laden, bevor überhaupt geschrieben wird. Die Seite zieht
+# in dieser Phase einen Entwurf nach und verwirft dabei bereits gesetzte Werte.
+KLEINANZEIGEN_READY_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_READY_TIMEOUT_MS", "8000"))
+KLEINANZEIGEN_SECTION_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_SECTION_TIMEOUT_MS", "20000"))
+KLEINANZEIGEN_CONFIRM_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_CONFIRM_TIMEOUT_MS", "15000"))
 
 # Configuration for langfuse and open telemetry
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")

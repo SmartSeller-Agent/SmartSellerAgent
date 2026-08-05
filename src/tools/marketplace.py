@@ -35,32 +35,49 @@ scripts/inspect_offer_form.py ermittelt):
   Preistyp ist ein Button mit Popup-Liste, die Kategorie eine Radiogruppe mit
   optisch verdeckten Inputs — geklickt wird darum immer das ``<label>``.
 """
+import json
 import os
 import re
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
 from smolagents import tool
 
-# --- Konfiguration (wandert im nächsten Schritt nach src/config.py) ---
-STATE_DIR = Path(os.getenv("KLEINANZEIGEN_STATE_DIR", ".state"))
-SESSION_FILE = STATE_DIR / "kleinanzeigen_session.json"
-SCREENSHOT_DIR = Path(os.getenv("KLEINANZEIGEN_SCREENSHOT_DIR", "screenshots"))
+from src.config import (
+    KLEINANZEIGEN_CONFIRM_TIMEOUT_MS,
+    KLEINANZEIGEN_FIELD_TIMEOUT_MS,
+    KLEINANZEIGEN_HEADLESS,
+    KLEINANZEIGEN_READY_TIMEOUT_MS,
+    KLEINANZEIGEN_SCREENSHOT_DIR,
+    KLEINANZEIGEN_SECTION_TIMEOUT_MS,
+    KLEINANZEIGEN_SESSION_FILE,
+    KLEINANZEIGEN_SLOW_MO_MS,
+    KLEINANZEIGEN_STATE_DIR,
+)
 
-# Headless ist der Normalfall — im Container gibt es keinen X-Server. Für die
-# manuelle Fehlersuche auf dem Host: KLEINANZEIGEN_HEADLESS=false
-HEADLESS = os.getenv("KLEINANZEIGEN_HEADLESS", "true").lower() not in ("0", "false", "no")
-SLOW_MO_MS = int(os.getenv("KLEINANZEIGEN_SLOW_MO_MS", "0"))
+# Kurze Namen fürs Modul. Ein Alias statt eines zweiten Env-Zugriffs, damit die
+# Auswertung von .env an genau einer Stelle passiert (src/config.py).
+STATE_DIR = KLEINANZEIGEN_STATE_DIR
+SESSION_FILE = KLEINANZEIGEN_SESSION_FILE
+SCREENSHOT_DIR = KLEINANZEIGEN_SCREENSHOT_DIR
+HEADLESS = KLEINANZEIGEN_HEADLESS
+SLOW_MO_MS = KLEINANZEIGEN_SLOW_MO_MS
+FIELD_TIMEOUT_MS = KLEINANZEIGEN_FIELD_TIMEOUT_MS
+READY_TIMEOUT_MS = KLEINANZEIGEN_READY_TIMEOUT_MS
+SECTION_TIMEOUT_MS = KLEINANZEIGEN_SECTION_TIMEOUT_MS
+CONFIRM_TIMEOUT_MS = KLEINANZEIGEN_CONFIRM_TIMEOUT_MS
 
 OFFER_FORM_URL = "https://www.kleinanzeigen.de/p-anzeige-aufgeben-schritt2.html"
 CONFIRM_URL_GLOB = "https://www.kleinanzeigen.de/p-anzeige-aufgeben-bestaetigung.html**"
+MY_ADS_URL = "https://www.kleinanzeigen.de/m-meine-anzeigen.html"
 
-# Auf ein vorhandenes Feld warten wir kurz; auf serverseitig nachgeladene
-# Abschnitte und auf die Bestätigungsseite deutlich länger.
-FIELD_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_FIELD_TIMEOUT_MS", "5000"))
-SECTION_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_SECTION_TIMEOUT_MS", "20000"))
-CONFIRM_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_CONFIRM_TIMEOUT_MS", "15000"))
+# Ohne gültige Anmeldung leitet die Website auf die Loginseite um. Das ist das
+# verlässlichste Signal — verlässlicher als ein Selektor, der sich ändern kann.
+LOGIN_URL_MARKER = "m-einloggen"
 
 # Titellänge laut Formular. Im ersten echten Testlauf gegenzuprüfen.
 MAX_TITLE_LEN = 65
@@ -71,6 +88,120 @@ _PRICE_TYPE_LABELS = {
     "NEGOTIABLE": "VB",
     "GIVE_AWAY": "Zu verschenken",
 }
+
+
+# --------------------------------------------------------------------------
+# Anmeldung
+# --------------------------------------------------------------------------
+class SessionExpiredError(RuntimeError):
+    """Die gespeicherte Anmeldung wird von der Website nicht mehr akzeptiert."""
+
+
+class SessionMissingError(FileNotFoundError):
+    """Es wurde noch nie eine Anmeldung gespeichert."""
+
+
+@dataclass
+class SessionStatus:
+    """Was sich über die Anmeldung sagen lässt, ohne einen Browser zu starten."""
+
+    path: Path
+    exists: bool
+    saved_at: Optional[datetime] = None
+    live_cookies: int = 0
+    expired_cookies: int = 0
+    # Späteste Ablaufzeit aller noch gültigen Cookies. Eine Obergrenze, kein
+    # Versprechen: welches Cookie die Anmeldung trägt, wissen wir nicht.
+    latest_expiry: Optional[datetime] = None
+    error: Optional[str] = None
+
+    @property
+    def usable(self) -> bool:
+        """Lohnt sich ein Versuch überhaupt?
+
+        Nur eine Vorprüfung. Der Server kann eine Sitzung jederzeit verwerfen,
+        auch wenn die Cookies lokal noch gültig aussehen.
+        """
+        return self.exists and self.error is None and self.live_cookies > 0
+
+    def describe(self) -> str:
+        if not self.exists:
+            return f"Keine gespeicherte Anmeldung unter {self.path}."
+        if self.error:
+            return f"Anmeldedatei {self.path} ist unbrauchbar: {self.error}"
+
+        saved = self.saved_at.strftime("%d.%m.%Y %H:%M") if self.saved_at else "unbekannt"
+        lines = [
+            f"Anmeldung gespeichert unter {self.path} (Stand {saved}).",
+            f"Cookies: {self.live_cookies} gültig, {self.expired_cookies} abgelaufen.",
+        ]
+        if self.latest_expiry:
+            lines.append(
+                f"Spätestens gültig bis {self.latest_expiry.strftime('%d.%m.%Y %H:%M')}."
+            )
+        if not self.usable:
+            lines.append("Alle dauerhaften Cookies sind abgelaufen — neu anmelden.")
+        return " ".join(lines)
+
+
+def read_session_status(path: Optional[Path] = None) -> SessionStatus:
+    """Liest die gespeicherte Anmeldung, ohne sie zu benutzen.
+
+    Ein Playwright-storage_state ist eine JSON-Datei mit Cookies. Deren
+    Ablaufzeiten verraten schon auf der Platte, ob ein Versuch aussichtslos
+    ist — das spart einen Browserstart von mehreren Sekunden.
+    """
+    path = path or SESSION_FILE
+    if not path.is_file():
+        return SessionStatus(path=path, exists=False)
+
+    saved_at = datetime.fromtimestamp(path.stat().st_mtime)
+    try:
+        cookies = json.loads(path.read_text(encoding="utf-8")).get("cookies", [])
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        return SessionStatus(path=path, exists=True, saved_at=saved_at, error=str(e))
+
+    now = time.time()
+    # expires <= 0 kennzeichnet ein Sitzungscookie ohne festes Ablaufdatum;
+    # über dessen Gültigkeit lässt sich hier nichts aussagen.
+    expiries = [c.get("expires", -1) for c in cookies]
+    live = [e for e in expiries if e > now]
+    expired = [e for e in expiries if 0 < e <= now]
+
+    return SessionStatus(
+        path=path,
+        exists=True,
+        saved_at=saved_at,
+        live_cookies=len(live),
+        expired_cookies=len(expired),
+        latest_expiry=datetime.fromtimestamp(max(live)) if live else None,
+    )
+
+
+def require_session() -> SessionStatus:
+    """Prüft vorab, damit nicht erst der Browser hochfährt und dann scheitert."""
+    status = read_session_status()
+    if not status.exists:
+        raise SessionMissingError(
+            f"{status.describe()} Bitte zuerst bei kleinanzeigen.de anmelden."
+        )
+    if not status.usable:
+        raise SessionExpiredError(status.describe())
+    return status
+
+
+def _ensure_logged_in(page) -> None:
+    """Nach dem Seitenaufruf prüfen, ob die Website die Sitzung akzeptiert hat.
+
+    Kostet nichts extra — die Seite ist ohnehin geladen. Ohne diese Prüfung
+    liefe der Ablauf in einen unverständlichen Timeout auf dem Titelfeld,
+    weil auf der Loginseite schlicht kein Formular steht.
+    """
+    if LOGIN_URL_MARKER in page.url:
+        raise SessionExpiredError(
+            "Die Website hat auf die Anmeldeseite umgeleitet — die gespeicherte "
+            f"Anmeldung ({SESSION_FILE}) gilt nicht mehr. Bitte neu anmelden."
+        )
 
 
 def is_dry_run() -> bool:
@@ -150,22 +281,78 @@ def _screenshot(page, name: str) -> None:
         pass
 
 
-def _fill_verified(page, locator, value: str, what: str, attempts: int = 3) -> None:
+def _await_ready(page) -> None:
+    """Der Seite Zeit geben, bevor wir schreiben.
+
+    Kurz nach dem Laden zieht die Seite einen gespeicherten Entwurf nach und
+    überschreibt dabei alles, was schon im Formular steht. Solange die
+    Hintergrundabfragen laufen, hält kein Wert. ``networkidle`` läuft hier oft
+    in den Timeout (die Seite pollt dauernd) — das ist kein Fehler: dann hat
+    sie die Zeit trotzdem gehabt.
+    """
+    try:
+        page.wait_for_load_state("networkidle", timeout=READY_TIMEOUT_MS)
+    except Exception:
+        pass
+
+
+def _fill_verified(page, locator, value: str, what: str, attempts: int = 5) -> None:
     """Schreibt einen Wert und liest ihn zurück.
 
-    Die Seite lädt kurz nach dem Öffnen einen Entwurf nach und überschreibt
-    dabei bereits gesetzte Felder. ``fill()`` meldet das nicht — der Wert ist
-    einfach wieder weg. Deshalb nachkontrollieren statt hoffen.
+    ``fill()`` meldet nicht, wenn die Seite den Wert gleich wieder verwirft —
+    er ist einfach weg. Die Wartezeit verdoppelt sich mit jedem Versuch
+    (0,5 s bis 8 s), damit auch ein spät eintreffender Entwurf noch überholt
+    wird. Feste kurze Abstände haben genau daran gescheitert.
     """
+    wait_ms = 500
     for _ in range(attempts):
         locator.fill(value)
-        page.wait_for_timeout(500)
-        if locator.input_value() == value:
+        page.wait_for_timeout(wait_ms)
+        # Leerraum normalisiert die Seite selbst; das ist kein Verlust.
+        if locator.input_value().strip() == value.strip():
             return
+        wait_ms *= 2
+
     raise RuntimeError(
-        f"{what} ließ sich nach {attempts} Versuchen nicht setzen — "
-        "die Seite überschreibt das Feld."
+        f"{what} ließ sich in {attempts} Versuchen nicht setzen — die Seite "
+        "überschreibt das Feld immer wieder. Mit KLEINANZEIGEN_READY_TIMEOUT_MS "
+        "lässt sich die Wartezeit vor dem Ausfüllen erhöhen."
     )
+
+
+def _verify_form_state(page, listing: Listing, log: List[str]) -> None:
+    """Vor dem Absenden noch einmal alles gegenlesen.
+
+    Ein Feld kann auch dann noch verworfen werden, wenn es beim Setzen
+    stehengeblieben ist. Ohne diese Kontrolle ginge im schlechtesten Fall eine
+    Anzeige ohne Titel online.
+    """
+    expected = {
+        'input[id="ad-title"]': listing.title,
+        'textarea[id="ad-description"]': listing.description,
+        'input[id="ad-zip-code"]': listing.zip_code,
+    }
+
+    drifted = []
+    for selector, want in expected.items():
+        got = page.locator(selector).input_value()
+        # Die Seite normalisiert Leerraum, das ist kein Abweichen.
+        if got.strip() != want.strip():
+            drifted.append(f"{selector} enthält {got!r} statt {want!r}")
+
+    if listing.price_type != "GIVE_AWAY":
+        got = page.locator('input[id="ad-price-amount"]').input_value()
+        try:
+            matches = float(got.replace(",", ".")) == listing.price
+        except ValueError:
+            matches = False
+        if not matches:
+            drifted.append(f"Preisfeld enthält {got!r} statt {listing.price:.0f}")
+
+    if drifted:
+        raise RuntimeError("Formular stimmt nicht mehr: " + "; ".join(drifted))
+
+    log.append("Formularinhalt vor dem Absenden gegengelesen.")
 
 
 def _check_radio(page, input_id: str) -> None:
@@ -415,7 +602,10 @@ def fill_offer_form(page, listing: Listing, dry_run: bool = True) -> List[str]:
     log: List[str] = []
 
     page.goto(OFFER_FORM_URL)
+    _ensure_logged_in(page)
     _accept_cookies(page, log)
+    # Erst schreiben, wenn die Seite mit dem Nachladen fertig ist.
+    _await_ready(page)
     _select_ad_type_offer(page, log)
 
     title_field = _fill_title(page, listing, log)
@@ -431,6 +621,7 @@ def fill_offer_form(page, listing: Listing, dry_run: bool = True) -> List[str]:
     _upload_images(page, listing, log)
     _fill_zip(page, listing, log)
 
+    _verify_form_state(page, listing, log)
     _screenshot(page, "06_form_filled.png")
 
     if dry_run:
@@ -458,15 +649,10 @@ def fill_offer_form(page, listing: Listing, dry_run: bool = True) -> List[str]:
 # --------------------------------------------------------------------------
 # Browser-Lebenszyklus
 # --------------------------------------------------------------------------
-def publish_offer(listing: Listing, dry_run: bool = True) -> List[str]:
-    """Startet den Browser mit gespeicherter Session und füllt das Formular."""
+@contextmanager
+def _browser_page():
+    """Browser mit gespeicherter Anmeldung, danach zuverlässig geschlossen."""
     from playwright.sync_api import sync_playwright
-
-    if not SESSION_FILE.is_file():
-        raise FileNotFoundError(
-            f"Keine gespeicherte Anmeldung unter {SESSION_FILE}. "
-            "Bitte zuerst bei kleinanzeigen.de anmelden."
-        )
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -475,15 +661,58 @@ def publish_offer(listing: Listing, dry_run: bool = True) -> List[str]:
             # Verhindert Berechtigungs-Blasen des Browsers über der Seite.
             args=["--disable-notifications", "--deny-permission-prompts"],
         )
-        context = browser.new_context(storage_state=str(SESSION_FILE), no_viewport=True)
-        page = context.new_page()
+        try:
+            context = browser.new_context(
+                storage_state=str(SESSION_FILE), no_viewport=True
+            )
+            yield context.new_page()
+        finally:
+            browser.close()
+
+
+def publish_offer(listing: Listing, dry_run: bool = True) -> List[str]:
+    """Startet den Browser mit gespeicherter Session und füllt das Formular."""
+    require_session()
+
+    with _browser_page() as page:
         try:
             return fill_offer_form(page, listing, dry_run=dry_run)
         except Exception:
             _screenshot(page, "99_error.png")
             raise
-        finally:
-            browser.close()
+
+
+def verify_session_online() -> List[str]:
+    """Ruft eine geschützte Seite auf und schaut, ob die Anmeldung trägt.
+
+    Die lokale Prüfung sieht nur Ablaufzeiten. Eine serverseitig verworfene
+    Sitzung — nach Passwortwechsel oder Abmeldung auf einem anderen Gerät —
+    fällt erst hier auf.
+    """
+    log: List[str] = []
+
+    with _browser_page() as page:
+        page.goto(MY_ADS_URL)
+        if LOGIN_URL_MARKER in page.url:
+            _screenshot(page, "10_session_rejected.png")
+            raise SessionExpiredError(
+                "Die Website hat auf die Anmeldeseite umgeleitet — die Sitzung "
+                "wird nicht mehr akzeptiert."
+            )
+
+        _accept_cookies(page, log)
+
+        # Der Abmelde-Link steht nur auf angemeldeten Seiten.
+        if page.locator("text=Ausloggen").count() > 0:
+            log.append("Angemeldet — die Sitzung ist gültig.")
+            return log
+
+        _screenshot(page, "10_session_unclear.png")
+        log.append(
+            "Kein Abmelde-Link gefunden, aber auch keine Umleitung zur Anmeldung. "
+            "Zustand unklar — bitte screenshots/10_session_unclear.png prüfen."
+        )
+        return log
 
 
 # --------------------------------------------------------------------------
@@ -491,6 +720,29 @@ def publish_offer(listing: Listing, dry_run: bool = True) -> List[str]:
 # --------------------------------------------------------------------------
 def _parse_image_paths(raw: str) -> List[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+@tool
+def check_marketplace_session() -> str:
+    """
+    Prüft, ob die gespeicherte Anmeldung bei kleinanzeigen.de noch gültig ist.
+
+    Vor dem Veröffentlichen aufrufen. Ist die Anmeldung abgelaufen, muss sich
+    ein Mensch neu anmelden — das kann kein Tool erledigen.
+    """
+    status = read_session_status()
+    if not status.usable:
+        return f"Nicht angemeldet. {status.describe()}"
+
+    try:
+        log = verify_session_online()
+    except SessionExpiredError as e:
+        return f"Nicht angemeldet. {e}"
+    except Exception as e:
+        # Netzwerk- oder Browserproblem: sagt nichts über die Anmeldung aus.
+        return f"Anmeldung konnte nicht geprüft werden: {e}"
+
+    return f"{status.describe()}\n" + "\n".join(log)
 
 
 @tool
@@ -539,6 +791,10 @@ def publish_listing(
     dry_run = is_dry_run()
     try:
         log = publish_offer(listing, dry_run=dry_run)
+    except (SessionMissingError, SessionExpiredError) as e:
+        # Eigener Zweig, weil hier ein Mensch handeln muss: erneut anmelden.
+        # Ein Wiederholungsversuch des Agenten wäre sinnlos.
+        return f"Nicht angemeldet, Anzeige nicht erstellt. {e}"
     except Exception as e:
         return f"Fehler beim Veröffentlichen: {e}"
 
@@ -553,10 +809,15 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Kleinanzeige ausfüllen und optional veröffentlichen")
-    parser.add_argument("--title", required=True)
-    parser.add_argument("--description", required=True)
-    parser.add_argument("--price", type=float, required=True)
-    parser.add_argument("--zip", dest="zip_code", required=True)
+    parser.add_argument(
+        "--check-session",
+        action="store_true",
+        help="Nur die gespeicherte Anmeldung prüfen, keine Anzeige anlegen",
+    )
+    parser.add_argument("--title")
+    parser.add_argument("--description")
+    parser.add_argument("--price", type=float)
+    parser.add_argument("--zip", dest="zip_code")
     parser.add_argument("--images", default="", help="Pfade, durch Komma getrennt")
     parser.add_argument("--price-type", default="FIXED", choices=PRICE_TYPES)
     parser.add_argument("--category", default="", help="Stichwort, z. B. 'Badezimmer'")
@@ -569,6 +830,30 @@ def main() -> None:
         help="Anzeige wirklich veröffentlichen (ohne diesen Schalter nur ausfüllen)",
     )
     args = parser.parse_args()
+
+    if args.check_session:
+        status = read_session_status()
+        print(status.describe())
+        if not status.usable:
+            raise SystemExit(1)
+        for line in verify_session_online():
+            print(line)
+        return
+
+    # Nicht über required=True, sonst ließe sich --check-session nicht allein
+    # aufrufen.
+    missing = [
+        name
+        for name, value in (
+            ("--title", args.title),
+            ("--description", args.description),
+            ("--price", args.price),
+            ("--zip", args.zip_code),
+        )
+        if value is None
+    ]
+    if missing:
+        parser.error(f"fehlende Angaben: {', '.join(missing)}")
 
     listing = Listing(
         title=args.title,

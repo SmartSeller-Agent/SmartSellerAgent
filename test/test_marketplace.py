@@ -13,12 +13,15 @@ schon Fehlschläge eingebracht haben:
   * frisch gesetzte Textfelder können vom nachgeladenen Entwurf
     überschrieben werden.
 """
+import json
 import re
+import time
+from contextlib import contextmanager
 
 import pytest
 
 from src.tools import marketplace
-from src.tools.marketplace import Listing
+from src.tools.marketplace import Listing, SessionExpiredError, SessionMissingError
 
 DEFAULT_CATEGORIES = [
     ("91", "Haus & Garten → Badezimmer"),
@@ -84,8 +87,9 @@ class FakeLocator:
     # -- Aktionen --------------------------------------------------------
     def fill(self, value):
         self.wait_for()
-        if self.selector in self.page.overwritten_once:
-            self.page.overwritten_once.remove(self.selector)
+        remaining = self.page.overwrites.get(self.selector, 0)
+        if remaining > 0:
+            self.page.overwrites[self.selector] = remaining - 1
             self.page.filled[self.selector] = ""  # Entwurf überschreibt
             return
         self.page.filled[self.selector] = value
@@ -114,14 +118,19 @@ class FakePage:
         has_shipping=True,
         has_buy_now=True,
         missing=(),
-        overwritten_once=(),
+        overwrites=None,
+        logged_in=True,
+        shows_logout_link=True,
     ):
         self.categories = DEFAULT_CATEGORIES if categories is None else list(categories)
         self.has_shipping = has_shipping
         self.has_buy_now = has_buy_now
         self.missing = set(missing)
-        # Selektoren, deren erstes fill() vom nachgeladenen Entwurf verworfen wird.
-        self.overwritten_once = set(overwritten_once)
+        # Selektor -> wie oft der nachgeladene Entwurf das fill() noch verwirft.
+        self.overwrites = dict(overwrites or {})
+        # Ohne gültige Anmeldung leitet die Website auf die Loginseite um.
+        self.logged_in = logged_in
+        self.shows_logout_link = shows_logout_link
 
         self.filled = {}
         self.clicked = []
@@ -134,7 +143,8 @@ class FakePage:
         self.price_type = "Festpreis"
         # Vorbelegung wie im echten Formular.
         self.checked = {"ad-type-OFFER", "ad-shipping-enabled-yes"}
-        self.url = (
+        self.url = "about:blank"
+        self.confirm_url = (
             "https://www.kleinanzeigen.de/p-anzeige-aufgeben-bestaetigung.html?adId=1234"
         )
 
@@ -183,6 +193,8 @@ class FakePage:
             return len(self.categories)
         if selector.startswith(_PRICE_OPTIONS):
             return len(_PRICE_TYPE_ORDER) if self.menu_open else 0
+        if selector == "text=Ausloggen":
+            return 1 if self.logged_in and self.shows_logout_link else 0
         return 0 if selector in self.missing else 1
 
     def text_of(self, selector):
@@ -234,6 +246,7 @@ class FakePage:
     # -- Playwright-Oberfläche -------------------------------------------
     def goto(self, url):
         self.visited.append(url)
+        self.url = url if self.logged_in else "https://www.kleinanzeigen.de/m-einloggen.html"
 
     def locator(self, selector):
         return FakeLocator(self, selector)
@@ -247,8 +260,12 @@ class FakePage:
     def wait_for_timeout(self, _ms):
         pass
 
+    def wait_for_load_state(self, _state, **_kwargs):
+        pass
+
     def wait_for_url(self, pattern, **_kwargs):
         self.waited_for_url.append(pattern)
+        self.url = self.confirm_url
 
 
 @pytest.fixture
@@ -474,23 +491,65 @@ def test_give_away_skips_the_price_field(listing):
 # --------------------------------------------------------------------------
 def test_overwritten_field_is_written_again(listing):
     """Die Seite verwirft den ersten Wert stillschweigend — wir schreiben nach."""
-    page = FakePage(overwritten_once={'input[id="ad-title"]'})
+    page = FakePage(overwrites={'input[id="ad-title"]': 1})
 
     marketplace.fill_offer_form(page, listing, dry_run=True)
 
     assert page.filled['input[id="ad-title"]'] == listing.title
 
 
-def test_permanently_overwritten_field_raises_instead_of_publishing_garbage(
-    listing, monkeypatch
-):
-    page = FakePage()
-    monkeypatch.setattr(
-        FakeLocator, "fill", lambda self, value: page.filled.__setitem__(self.selector, "")
-    )
+def test_a_late_draft_is_still_outlasted(listing):
+    """Der Auslöser des Fehlschlags: drei kurze Versuche reichten nicht.
+
+    Vier Verwerfungen in Folge müssen überstanden werden — genau dafür wächst
+    die Wartezeit zwischen den Versuchen.
+    """
+    page = FakePage(overwrites={'input[id="ad-title"]': 4})
+
+    marketplace.fill_offer_form(page, listing, dry_run=True)
+
+    assert page.filled['input[id="ad-title"]'] == listing.title
+
+
+def test_permanently_overwritten_field_raises_instead_of_publishing_garbage(listing):
+    page = FakePage(overwrites={'input[id="ad-title"]': 99})
 
     with pytest.raises(RuntimeError, match="Titel ließ sich"):
         marketplace.fill_offer_form(page, listing, dry_run=True)
+
+
+def test_a_field_lost_after_being_set_is_caught_before_submitting(listing, monkeypatch):
+    """Sonst ginge im schlechtesten Fall eine Anzeige ohne Titel online."""
+    page = FakePage()
+    original = marketplace._fill_zip
+
+    def wipe_title_while_filling_zip(page_arg, listing_arg, log):
+        original(page_arg, listing_arg, log)
+        page_arg.filled['input[id="ad-title"]'] = ""
+
+    monkeypatch.setattr(marketplace, "_fill_zip", wipe_title_while_filling_zip)
+
+    with pytest.raises(RuntimeError, match="Formular stimmt nicht mehr"):
+        marketplace.fill_offer_form(page, listing, dry_run=False)
+
+    # Entscheidend: der Abbruch kommt VOR dem Absenden.
+    assert not any("Anzeige aufgeben" in sel for sel in page.clicked)
+
+
+def test_normalized_whitespace_is_not_treated_as_drift(listing, monkeypatch):
+    """Die Seite trimmt Eingaben — das darf weder Wiederholungen noch Abbruch auslösen."""
+    listing.description = "  Sehr gut erhalten.  "
+    page = FakePage()
+    monkeypatch.setattr(
+        FakeLocator,
+        "fill",
+        lambda self, value: self.page.filled.__setitem__(self.selector, value.strip()),
+    )
+
+    log = marketplace.fill_offer_form(page, listing, dry_run=True)
+
+    assert any("gegengelesen" in line for line in log)
+    assert page.filled['textarea[id="ad-description"]'] == "Sehr gut erhalten."
 
 
 def test_missing_submit_button_raises(listing):
@@ -566,10 +625,172 @@ def test_tool_returns_validation_problems_without_opening_a_browser(monkeypatch)
     assert "Titel ist leer" in result
 
 
-def test_tool_reports_a_missing_session_as_text(monkeypatch, listing):
-    """Der Agent bekommt einen lesbaren Hinweis statt eines Absturzes."""
+# --------------------------------------------------------------------------
+# Anmeldung — lokale Prüfung ohne Browser
+# --------------------------------------------------------------------------
+def _write_session(path, cookies):
+    path.write_text(json.dumps({"cookies": cookies, "origins": []}), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def session_file(tmp_path, monkeypatch):
+    path = tmp_path / "kleinanzeigen_session.json"
+    monkeypatch.setattr(marketplace, "SESSION_FILE", path)
+    return path
+
+
+def test_missing_session_file_is_reported(session_file):
+    status = marketplace.read_session_status()
+
+    assert status.exists is False
+    assert status.usable is False
+    assert "Keine gespeicherte Anmeldung" in status.describe()
+
+
+def test_damaged_session_file_is_reported_not_raised(session_file):
+    """Eine kaputte Datei darf den Aufrufer nicht mit einem Stacktrace treffen."""
+    session_file.write_text("{kein json", encoding="utf-8")
+
+    status = marketplace.read_session_status()
+
+    assert status.exists is True
+    assert status.usable is False
+    assert "unbrauchbar" in status.describe()
+
+
+def test_expired_cookies_make_the_session_unusable(session_file):
+    _write_session(session_file, [{"name": "auth", "expires": time.time() - 3600}])
+
+    status = marketplace.read_session_status()
+
+    assert status.expired_cookies == 1
+    assert status.live_cookies == 0
+    assert status.usable is False
+    assert "abgelaufen" in status.describe()
+
+
+def test_a_live_cookie_makes_the_session_worth_trying(session_file):
+    later = time.time() + 7 * 24 * 3600
+    _write_session(
+        session_file,
+        [
+            {"name": "auth", "expires": later},
+            {"name": "alt", "expires": time.time() - 10},
+            # Sitzungscookie ohne Ablaufdatum — zählt in keine der Gruppen.
+            {"name": "tmp", "expires": -1},
+        ],
+    )
+
+    status = marketplace.read_session_status()
+
+    assert status.live_cookies == 1
+    assert status.expired_cookies == 1
+    assert status.usable is True
+    assert status.latest_expiry.timestamp() == pytest.approx(later)
+
+
+def test_require_session_distinguishes_missing_from_expired(session_file):
+    with pytest.raises(SessionMissingError):
+        marketplace.require_session()
+
+    _write_session(session_file, [{"name": "auth", "expires": time.time() - 1}])
+    with pytest.raises(SessionExpiredError):
+        marketplace.require_session()
+
+
+# --------------------------------------------------------------------------
+# Anmeldung — was der Browser sagt
+# --------------------------------------------------------------------------
+@pytest.fixture
+def use_fake_browser(monkeypatch):
+    def install(page):
+        @contextmanager
+        def fake_browser_page():
+            yield page
+
+        monkeypatch.setattr(marketplace, "_browser_page", fake_browser_page)
+        return page
+
+    return install
+
+
+def test_redirect_to_login_aborts_the_form_immediately(listing):
+    """Sonst liefe der Ablauf in einen Timeout auf dem Titelfeld."""
+    page = FakePage(logged_in=False)
+
+    with pytest.raises(SessionExpiredError, match="Anmeldeseite"):
+        marketplace.fill_offer_form(page, listing, dry_run=True)
+
+    assert page.filled == {}
+
+
+def test_online_check_accepts_a_valid_session(use_fake_browser):
+    page = use_fake_browser(FakePage())
+
+    log = marketplace.verify_session_online()
+
+    assert page.visited == [marketplace.MY_ADS_URL]
+    assert any("Sitzung ist gültig" in line for line in log)
+
+
+def test_online_check_detects_a_rejected_session(use_fake_browser):
+    use_fake_browser(FakePage(logged_in=False))
+
+    with pytest.raises(SessionExpiredError):
+        marketplace.verify_session_online()
+
+
+def test_online_check_admits_when_it_cannot_tell(use_fake_browser):
+    """Kein Abmelde-Link, aber auch keine Umleitung — das ist kein 'gültig'."""
+    page = use_fake_browser(FakePage(shows_logout_link=False))
+
+    log = marketplace.verify_session_online()
+
+    assert any("unklar" in line for line in log)
+    assert any("10_session_unclear.png" in str(shot) for shot in page.screenshots)
+
+
+def test_session_tool_does_not_start_a_browser_when_the_file_is_gone(
+    session_file, monkeypatch
+):
+    monkeypatch.setattr(
+        marketplace,
+        "_browser_page",
+        lambda: pytest.fail("Browser darf ohne Anmeldedatei nicht starten"),
+    )
+
+    result = marketplace.check_marketplace_session()
+
+    assert result.startswith("Nicht angemeldet")
+
+
+def test_session_tool_confirms_a_working_session(session_file, use_fake_browser):
+    _write_session(session_file, [{"name": "auth", "expires": time.time() + 3600}])
+    use_fake_browser(FakePage())
+
+    result = marketplace.check_marketplace_session()
+
+    assert "Sitzung ist gültig" in result
+    assert "Cookies: 1 gültig" in result
+
+
+# --------------------------------------------------------------------------
+# Tool-Hülle: Anmeldefehler sind Handlungsanweisungen, keine Pannen
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "error",
+    [
+        SessionMissingError("Keine gespeicherte Anmeldung unter .state/session.json"),
+        SessionExpiredError("Die Website hat auf die Anmeldeseite umgeleitet"),
+    ],
+)
+def test_tool_reports_login_problems_as_something_a_human_must_fix(
+    monkeypatch, listing, error
+):
+    """Ein Wiederholungsversuch des Agenten wäre sinnlos — das muss die Antwort sagen."""
     def fake_publish_offer(*_args, **_kwargs):
-        raise FileNotFoundError("Keine gespeicherte Anmeldung unter .state/session.json")
+        raise error
 
     monkeypatch.setattr(marketplace, "publish_offer", fake_publish_offer)
 
@@ -580,5 +801,5 @@ def test_tool_reports_a_missing_session_as_text(monkeypatch, listing):
         zip_code=listing.zip_code,
     )
 
-    assert "Fehler beim Veröffentlichen" in result
-    assert "Keine gespeicherte Anmeldung" in result
+    assert result.startswith("Nicht angemeldet")
+    assert str(error) in result
