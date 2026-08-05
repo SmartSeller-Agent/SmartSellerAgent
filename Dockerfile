@@ -44,21 +44,45 @@ RUN groupadd --system app && useradd --system --gid app --create-home app
 
 WORKDIR /app
 
+# PLAYWRIGHT_BROWSERS_PATH moves the browser out of the installing user's home.
+# Without it the download lands in /root/.cache and the unprivileged "app" user
+# cannot read it. The same variable is what makes the browser findable at run
+# time, so it has to stay set, not just exist during the build.
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # The virtual environment built in stage 1
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
+
+# Chromium and its system libraries for the kleinanzeigen.de publishing tool.
+#
+# Deliberately placed before the application code: this layer is several hundred
+# megabytes and must not be rebuilt every time a source file changes.
+#
+# --with-deps runs apt-get itself, which is why this needs to happen while we
+# are still root. The playwright CLI comes from the venv copied above, so the
+# browser version always matches the locked python package.
+RUN playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/* \
+    && chmod -R a+rX /ms-playwright
 
 # Application code, prompt templates, the Streamlit UI and the sample images
 COPY --chown=app:app pyproject.toml README.md frontend.py ./
 COPY --chown=app:app src/ ./src/
 COPY --chown=app:app test/ ./test/
 
-# Upload target of the Streamlit frontend. Created here so it exists and is
-# writable for the unprivileged user even before the shared volume is mounted.
-RUN mkdir -p /app/test/images/uploads && chown -R app:app /app/test/images
+# Directories the application writes to:
+#   test/images/uploads — where the frontend puts the uploaded photo
+#   .state              — the saved kleinanzeigen.de login (mounted volume)
+#   screenshots         — evidence of what the publishing tool did
+#
+# Created with the right owner already here. Docker seeds a fresh named volume
+# from the image directory it is mounted over, so this is what gives the
+# unprivileged user write access to the mounted .state volume.
+RUN mkdir -p /app/test/images/uploads /app/.state /app/screenshots \
+    && chown -R app:app /app/test/images /app/.state /app/screenshots
 
 USER app
 

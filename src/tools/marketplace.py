@@ -51,6 +51,7 @@ from src.config import (
     KLEINANZEIGEN_CONFIRM_TIMEOUT_MS,
     KLEINANZEIGEN_FIELD_TIMEOUT_MS,
     KLEINANZEIGEN_HEADLESS,
+    KLEINANZEIGEN_NO_SANDBOX,
     KLEINANZEIGEN_READY_TIMEOUT_MS,
     KLEINANZEIGEN_SCREENSHOT_DIR,
     KLEINANZEIGEN_SECTION_TIMEOUT_MS,
@@ -66,6 +67,7 @@ SESSION_FILE = KLEINANZEIGEN_SESSION_FILE
 SCREENSHOT_DIR = KLEINANZEIGEN_SCREENSHOT_DIR
 HEADLESS = KLEINANZEIGEN_HEADLESS
 SLOW_MO_MS = KLEINANZEIGEN_SLOW_MO_MS
+NO_SANDBOX = KLEINANZEIGEN_NO_SANDBOX
 FIELD_TIMEOUT_MS = KLEINANZEIGEN_FIELD_TIMEOUT_MS
 READY_TIMEOUT_MS = KLEINANZEIGEN_READY_TIMEOUT_MS
 SECTION_TIMEOUT_MS = KLEINANZEIGEN_SECTION_TIMEOUT_MS
@@ -654,12 +656,19 @@ def _browser_page():
     """Browser mit gespeicherter Anmeldung, danach zuverlässig geschlossen."""
     from playwright.sync_api import sync_playwright
 
+    # Verhindert Berechtigungs-Blasen des Browsers über der Seite.
+    args = ["--disable-notifications", "--deny-permission-prompts"]
+    if NO_SANDBOX:
+        # Im Container startet Chromium sonst nicht: seine Sandbox verlangt
+        # Rechte, die ein unprivilegierter Prozess dort nicht bekommt. Die
+        # Abschottung übernimmt hier der Container.
+        args += ["--no-sandbox", "--disable-setuid-sandbox"]
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=HEADLESS,
             slow_mo=SLOW_MO_MS,
-            # Verhindert Berechtigungs-Blasen des Browsers über der Seite.
-            args=["--disable-notifications", "--deny-permission-prompts"],
+            args=args,
         )
         try:
             context = browser.new_context(

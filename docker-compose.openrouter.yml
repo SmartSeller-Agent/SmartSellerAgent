@@ -48,8 +48,19 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
       OTEL_DEBUG_EXPORT: ${OTEL_DEBUG_EXPORT:-}
+      # --- kleinanzeigen.de publishing ---------------------------------
+      # Same settings as in docker-compose.yml; see there for the reasoning.
+      KLEINANZEIGEN_STATE_DIR: /app/.state
+      KLEINANZEIGEN_HEADLESS: "true"
+      KLEINANZEIGEN_NO_SANDBOX: "true"
+      # SAFETY SWITCH: unset means fill in the form but never submit it.
+      KLEINANZEIGEN_ALLOW_PUBLISH: ${KLEINANZEIGEN_ALLOW_PUBLISH:-}
+    # Chromium keeps its renderer memory in /dev/shm; 64 MB is not enough.
+    shm_size: 1gb
     volumes:
       - uploads:/app/test/images/uploads
+      # The saved login. Only api needs it — the browser runs there.
+      - marketplace-state:/app/.state
     # W11: the /health route doubles as the container healthcheck
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -86,3 +97,4 @@ services:
 
 volumes:
   uploads:
+  marketplace-state:

@@ -73,6 +73,14 @@ KLEINANZEIGEN_HEADLESS = os.getenv("KLEINANZEIGEN_HEADLESS", "true").lower() not
 )
 KLEINANZEIGEN_SLOW_MO_MS = int(os.getenv("KLEINANZEIGEN_SLOW_MO_MS", "0"))
 
+# Chromiums eigene Sandbox braucht Rechte, die ein unprivilegierter Prozess im
+# Container nicht hat. Deshalb wird sie dort abgeschaltet — die Isolation
+# leistet in diesem Fall der Container selbst. Auf dem Host bleibt sie an,
+# darum ist der Standard "aus".
+KLEINANZEIGEN_NO_SANDBOX = os.getenv("KLEINANZEIGEN_NO_SANDBOX", "").lower() in (
+    "1", "true", "yes",
+)
+
 # Auf ein vorhandenes Feld warten wir kurz; auf serverseitig nachgeladene
 # Abschnitte (Kategorievorschläge, Versand) und auf die Bestätigungsseite länger.
 KLEINANZEIGEN_FIELD_TIMEOUT_MS = int(os.getenv("KLEINANZEIGEN_FIELD_TIMEOUT_MS", "5000"))
