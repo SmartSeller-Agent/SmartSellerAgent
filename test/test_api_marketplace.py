@@ -56,6 +56,67 @@ def test_session_endpoint_reports_a_valid_login(client, session_file):
 
 
 # --------------------------------------------------------------------------
+# Freigabe zum Veröffentlichen
+# --------------------------------------------------------------------------
+def test_session_endpoint_says_whether_publishing_is_allowed(
+    client, session_file, monkeypatch
+):
+    """Damit die Oberfläche einen gesperrten Schalter erklären kann."""
+    monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "false")
+    assert client.get("/marketplace/session").json()["publishing_enabled"] is False
+
+    monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "true")
+    assert client.get("/marketplace/session").json()["publishing_enabled"] is True
+
+
+class _RecordingOrchestrator:
+    """Merkt sich, was das Tool zum Zeitpunkt des Laufs gesehen hätte."""
+
+    def __init__(self):
+        self.dry_runs = []
+
+    def run(self, task):
+        self.dry_runs.append(marketplace.is_dry_run())
+        return "fertige Anzeige"
+
+
+def test_a_task_may_publish_only_when_it_asks(client, monkeypatch):
+    monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "true")
+    orchestrator = _RecordingOrchestrator()
+    monkeypatch.setattr(app_module, "orchestrator", orchestrator)
+
+    client.post(
+        "/run-task", json={"task_name": "margin_check", "allow_publish": True}
+    )
+    client.post("/run-task", json={"task_name": "margin_check"})
+
+    # Erst mit Bitte, dann ohne — und ohne heisst Probelauf.
+    assert orchestrator.dry_runs == [False, True]
+
+
+def test_a_task_cannot_publish_against_the_installation(client, monkeypatch):
+    monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "false")
+    orchestrator = _RecordingOrchestrator()
+    monkeypatch.setattr(app_module, "orchestrator", orchestrator)
+
+    body = client.post(
+        "/run-task", json={"task_name": "margin_check", "allow_publish": True}
+    ).json()
+
+    assert orchestrator.dry_runs == [True]
+    assert body["published"] is False
+
+
+def test_the_permission_is_gone_once_the_request_is_over(client, monkeypatch):
+    monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "true")
+    monkeypatch.setattr(app_module, "orchestrator", _RecordingOrchestrator())
+
+    client.post("/run-task", json={"task_name": "margin_check", "allow_publish": True})
+
+    assert marketplace.is_dry_run() is True
+
+
+# --------------------------------------------------------------------------
 # Die echte Prüfung — dafür muss ein Browser laufen
 # --------------------------------------------------------------------------
 def test_verify_confirms_a_session_the_server_still_accepts(

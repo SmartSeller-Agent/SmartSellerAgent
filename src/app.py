@@ -108,9 +108,13 @@ api = FastAPI(title="SmartSeller Agent API", lifespan=lifespan)
 
 # Erweitertes Request-Modell: Erlaubt optionale Übergabe von Bildpfad und Preis
 class TaskRequest(BaseModel):
-    task_name: str  
+    task_name: str
     image_path: Optional[str] = str(_image_path)
     purchase_price: Optional[float] = 20.0
+    # Freigabe für genau diesen Auftrag. Standard aus, und selbst ein True
+    # reicht allein nicht — die Installation muss es zusätzlich erlauben
+    # (KLEINANZEIGEN_ALLOW_PUBLISH). Das Sprachmodell sieht dieses Feld nicht.
+    allow_publish: bool = False
 
 @api.get("/health")
 def health_check():
@@ -139,9 +143,17 @@ def run_agent_task(request: TaskRequest):
         final_task = task_prompt_template 
 
     try:
-        # 3. Das Multi-Agent-System (orchestrator) mit dem fertigen Task starten
-        result = orchestrator.run(final_task)
-        return {"task": request.task_name, "result": result}
+        # 3. Das Multi-Agent-System (orchestrator) mit dem fertigen Task starten.
+        #    Die Freigabe gilt nur für die Dauer dieses Aufrufs: smolagents ruft
+        #    Tools synchron im selben Thread auf, deshalb sieht das
+        #    Veröffentlichungs-Tool den Wert — und nur dieser Auftrag.
+        with marketplace.publishing_allowed(request.allow_publish):
+            result = orchestrator.run(final_task)
+        return {
+            "task": request.task_name,
+            "result": result,
+            "published": request.allow_publish and marketplace.publishing_enabled(),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -160,6 +172,9 @@ def _session_payload() -> dict:
         "usable": status.usable,
         "description": status.describe(),
         "saved_at": status.saved_at.isoformat() if status.saved_at else None,
+        # Damit die Oberfläche einen abgeschalteten Schalter erklären kann,
+        # statt ihn wirkungslos anzubieten.
+        "publishing_enabled": marketplace.publishing_enabled(),
     }
 
 

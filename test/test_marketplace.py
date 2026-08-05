@@ -632,7 +632,7 @@ def test_tool_defaults_to_dry_run(monkeypatch, listing):
     assert "Probelauf" in result
 
 
-def test_tool_publishes_only_when_explicitly_allowed(monkeypatch, listing):
+def test_tool_publishes_only_when_both_switches_agree(monkeypatch, listing):
     monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "true")
     seen = {}
 
@@ -644,19 +644,86 @@ def test_tool_publishes_only_when_explicitly_allowed(monkeypatch, listing):
 
     monkeypatch.setattr(marketplace, "publish_offer", fake_publish_offer)
 
-    result = marketplace.publish_listing(
-        title=listing.title,
-        description=listing.description,
-        price=listing.price,
-        zip_code=listing.zip_code,
-        image_paths=f"{listing.image_paths[0]}, {listing.image_paths[0]}",
-        category="Badezimmer",
-    )
+    with marketplace.publishing_allowed(True):
+        result = marketplace.publish_listing(
+            title=listing.title,
+            description=listing.description,
+            price=listing.price,
+            zip_code=listing.zip_code,
+            image_paths=f"{listing.image_paths[0]}, {listing.image_paths[0]}",
+            category="Badezimmer",
+        )
 
     assert seen["dry_run"] is False
     assert seen["images"] == [listing.image_paths[0], listing.image_paths[0]]
     assert seen["category"] == "Badezimmer"
     assert "Veröffentlichung" in result
+
+
+# --------------------------------------------------------------------------
+# Zwei Hände am Auslöser
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "installation_allows, task_asks, expected_dry_run",
+    [
+        (False, False, True),
+        # Die Installation erlaubt es, aber niemand hat darum gebeten.
+        (True, False, True),
+        # Jemand bittet darum, die Installation verbietet es — die Bitte
+        # allein darf nichts auslösen.
+        (False, True, True),
+        (True, True, False),
+    ],
+)
+def test_publishing_needs_both_switches(
+    monkeypatch, installation_allows, task_asks, expected_dry_run
+):
+    monkeypatch.setenv(
+        "KLEINANZEIGEN_ALLOW_PUBLISH", "true" if installation_allows else "false"
+    )
+
+    with marketplace.publishing_allowed(task_asks):
+        assert marketplace.is_dry_run() is expected_dry_run
+
+
+def test_the_permission_ends_with_the_block(monkeypatch):
+    monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "true")
+
+    with marketplace.publishing_allowed(True):
+        assert marketplace.is_dry_run() is False
+
+    assert marketplace.is_dry_run() is True
+
+
+def test_a_failed_run_still_gives_the_permission_back(monkeypatch):
+    monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "true")
+
+    with pytest.raises(RuntimeError):
+        with marketplace.publishing_allowed(True):
+            raise RuntimeError("Anzeige fehlgeschlagen")
+
+    assert marketplace.is_dry_run() is True
+
+
+def test_the_permission_does_not_leak_into_the_next_request(monkeypatch):
+    """FastAPI führt synchrone Endpunkte in wiederverwendeten Threads aus.
+
+    Ohne sauberes Zurücksetzen könnte ein Auftrag mit Freigabe einem späteren,
+    fremden Auftrag im selben Thread das Veröffentlichen erlauben.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "true")
+
+    def request(asks_for_it):
+        with marketplace.publishing_allowed(asks_for_it):
+            pass
+        return marketplace.is_dry_run()
+
+    # max_workers=1 erzwingt, dass beide Aufträge denselben Thread benutzen.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(request, True).result() is True
+        assert pool.submit(request, False).result() is True
 
 
 def test_tool_returns_validation_problems_without_opening_a_browser(monkeypatch):

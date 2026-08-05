@@ -83,14 +83,15 @@ def render_login_progress(sidebar) -> None:
         sidebar.caption(message)
 
 
-def render_session_sidebar() -> None:
+def render_session_sidebar():
+    """Zeichnet die Seitenleiste und gibt den Sitzungsstand zurück."""
     sidebar = st.sidebar
     sidebar.header("Anmeldung bei Kleinanzeigen")
 
     ok, session = _call("GET", SESSION_URL, timeout=QUICK_TIMEOUT_S)
     if not ok:
         sidebar.error(session)
-        return
+        return None
 
     # Bewusst nicht "Angemeldet": diese Auskunft stammt allein aus der Datei
     # und ihren Cookie-Ablaufzeiten. Ob der Anbieter die Sitzung noch
@@ -156,6 +157,8 @@ def render_session_sidebar() -> None:
             else:
                 st.error(result)
 
+    return session
+
 
 # --------------------------------------------------------------------------
 # Hauptbereich: Anzeige erstellen
@@ -163,7 +166,7 @@ def render_session_sidebar() -> None:
 st.set_page_config(page_title="SmartSeller Agent", page_icon="🛍️")
 st.title("🛍️ SmartSeller")
 
-render_session_sidebar()
+session = render_session_sidebar()
 
 st.write(
     "Lade ein Bild deines Artikels hoch. Der Agent erkennt das Produkt, "
@@ -174,6 +177,32 @@ uploaded_file = st.file_uploader("Produktbild hochladen (JPG/PNG)", type=["png",
 
 if uploaded_file is not None:
     st.image(uploaded_file, caption="Dein Produkt", use_container_width=True)
+
+    # Der Schalter für den unumkehrbaren Teil. Aus als Standard, und der Text
+    # sagt in beiden Stellungen, was tatsächlich passiert.
+    installation_allows = bool(session and session.get("publishing_enabled"))
+    allow_publish = st.checkbox(
+        "Anzeige anschließend wirklich veröffentlichen",
+        value=False,
+        disabled=not installation_allows,
+        help=(
+            "Aus: das Formular wird nur ausgefüllt und ein Screenshot abgelegt. "
+            "An: es entsteht eine öffentliche Anzeige unter deinem Konto, die "
+            "sich nur von Hand wieder löschen lässt."
+        ),
+    )
+
+    if not installation_allows:
+        st.caption(
+            "Veröffentlichen ist in dieser Installation gesperrt. "
+            "Zum Freigeben KLEINANZEIGEN_ALLOW_PUBLISH=true in der .env setzen "
+            "und die Container neu starten."
+        )
+    elif allow_publish:
+        st.warning(
+            "Es wird eine echte, öffentlich sichtbare Anzeige erstellt.",
+            icon="⚠️",
+        )
 
     if st.button("Verkaufsanzeige generieren"):
         with st.spinner("Agent arbeitet: Analysiert Bild und recherchiert Preise im Web..."):
@@ -190,6 +219,7 @@ if uploaded_file is not None:
                     "task_name": "create_listing",
                     "image_path": str(file_path.absolute()),
                     "purchase_price": 0.0,
+                    "allow_publish": allow_publish,
                 },
                 timeout=TASK_TIMEOUT_S,
             )

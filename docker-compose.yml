@@ -118,8 +118,9 @@ services:
       # Chromium's own sandbox needs privileges the unprivileged container user
       # does not have; the container is the isolation boundary instead.
       KLEINANZEIGEN_NO_SANDBOX: "true"
-      # SAFETY SWITCH: unset means fill in the form but never submit it. Only
-      # an explicit true in .env allows a real public ad to be created.
+      # SAFETY SWITCH, one of two: this allows publishing for the installation,
+      # the checkbox in the UI allows it for a single run. Both are needed, and
+      # neither is visible to the language model.
       KLEINANZEIGEN_ALLOW_PUBLISH: ${KLEINANZEIGEN_ALLOW_PUBLISH:-}
     # Chromium keeps its renderer memory in /dev/shm. Docker's 64 MB default is
     # not enough and makes tabs crash on content-heavy pages.

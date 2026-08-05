@@ -57,7 +57,8 @@ services:
       DISPLAY: ":99"
       KLEINANZEIGEN_HEADLESS: "false"
       KLEINANZEIGEN_NO_SANDBOX: "true"
-      # SAFETY SWITCH: unset means fill in the form but never submit it.
+      # SAFETY SWITCH, one of two — see docker-compose.yml. Both this and the
+      # checkbox in the UI are needed before anything goes live.
       KLEINANZEIGEN_ALLOW_PUBLISH: ${KLEINANZEIGEN_ALLOW_PUBLISH:-}
     # Chromium keeps its renderer memory in /dev/shm; 64 MB is not enough.
     shm_size: 1gb

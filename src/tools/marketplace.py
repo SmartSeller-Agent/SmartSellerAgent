@@ -35,6 +35,7 @@ scripts/inspect_offer_form.py ermittelt):
   Preistyp ist ein Button mit Popup-Liste, die Kategorie eine Radiogruppe mit
   optisch verdeckten Inputs — geklickt wird darum immer das ``<label>``.
 """
+import contextvars
 import json
 import os
 import re
@@ -250,15 +251,45 @@ def _ensure_logged_in(page) -> None:
         )
 
 
+# Freigabe für genau einen Auftrag. Bewusst *kein* Tool-Parameter: sonst
+# entschiede das Sprachmodell darüber, ob eine öffentliche Anzeige entsteht.
+#
+# Ein ContextVar und keine schlichte Variable, weil FastAPI synchrone
+# Endpunkte in einem Threadpool ausführt, dessen Threads wiederverwendet
+# werden. Ohne sauberes Zurücksetzen könnte eine Freigabe in eine spätere,
+# fremde Anfrage lecken.
+_publish_allowed = contextvars.ContextVar("kleinanzeigen_publish_allowed", default=False)
+
+
+@contextmanager
+def publishing_allowed(allowed: bool):
+    """Gibt das Veröffentlichen für die Dauer eines Auftrags frei."""
+    token = _publish_allowed.set(bool(allowed))
+    try:
+        yield
+    finally:
+        _publish_allowed.reset(token)
+
+
+def publishing_enabled() -> bool:
+    """Erlaubt diese Installation das Veröffentlichen überhaupt?
+
+    Der Schalter der Betreiberseite, gesetzt über die Umgebung. Er kann nur
+    verbieten, nie anordnen — veröffentlicht wird ausschließlich, wenn
+    zusätzlich ein Auftrag ausdrücklich darum bittet.
+    """
+    return os.getenv("KLEINANZEIGEN_ALLOW_PUBLISH", "").lower() in ("1", "true", "yes")
+
+
 def is_dry_run() -> bool:
     """Soll nur ausgefüllt (True) oder auch veröffentlicht (False) werden?
 
-    Bewusst *kein* Tool-Parameter: sonst entscheidet das Sprachmodell, ob eine
-    öffentliche Anzeige entsteht. Bis der Schalter aus dem Frontend
-    durchgereicht wird, steuert die Umgebung — und der Default ist der sichere
-    Fall.
+    Veröffentlicht wird nur, wenn beide Schalter zustimmen: die Installation
+    erlaubt es grundsätzlich, und dieser eine Auftrag verlangt es. Eine
+    öffentliche Anzeige lässt sich nicht zurücknehmen — deshalb zwei Hände am
+    Auslöser, und der sichere Fall ist der Standard.
     """
-    return os.getenv("KLEINANZEIGEN_ALLOW_PUBLISH", "").lower() not in ("1", "true", "yes")
+    return not (publishing_enabled() and _publish_allowed.get())
 
 
 @dataclass
@@ -1031,6 +1062,14 @@ def main() -> None:
     problems = listing.validate()
     if problems:
         raise SystemExit("Ungültige Anzeige:\n- " + "\n- ".join(problems))
+
+    if args.publish and not publishing_enabled():
+        raise SystemExit(
+            "Veröffentlichen ist in dieser Installation nicht freigegeben. "
+            "Dafür KLEINANZEIGEN_ALLOW_PUBLISH=true setzen. --publish allein "
+            "genügt bewusst nicht: eine öffentliche Anzeige lässt sich nicht "
+            "zurücknehmen."
+        )
 
     for line in publish_offer(listing, dry_run=not args.publish):
         print(line)
