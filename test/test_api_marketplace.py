@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import app as app_module
+from src import user_profile
 from src.login_job import LoginJob
 from src.tools import marketplace
 
@@ -18,6 +19,14 @@ from src.tools import marketplace
 @pytest.fixture
 def client():
     return TestClient(app_module.api)
+
+
+@pytest.fixture(autouse=True)
+def profile_file(monkeypatch, tmp_path):
+    """Das echte Profil des Entwicklers darf in Tests nicht mitreden."""
+    path = tmp_path / "profile.json"
+    monkeypatch.setattr(user_profile, "PROFILE_FILE", path)
+    return path
 
 
 @pytest.fixture
@@ -53,6 +62,52 @@ def test_session_endpoint_reports_a_valid_login(client, session_file):
 
     assert body["usable"] is True
     assert body["saved_at"] is not None
+
+
+# --------------------------------------------------------------------------
+# Einstellungen des Anwenders
+# --------------------------------------------------------------------------
+def test_a_fresh_installation_is_reported_as_incomplete(client):
+    """Daran erkennt die Oberfläche, dass sie nach den Angaben fragen muss."""
+    body = client.get("/profile").json()
+
+    assert body["complete"] is False
+    assert body["zip_code"] == ""
+
+
+def test_a_saved_profile_survives_and_is_readable(client):
+    saved = client.put("/profile", json={"zip_code": "78462"})
+
+    assert saved.status_code == 200
+    assert client.get("/profile").json() == {
+        "zip_code": "78462",
+        "complete": True,
+        "path": client.get("/profile").json()["path"],
+    }
+
+
+def test_surrounding_spaces_are_tolerated(client):
+    client.put("/profile", json={"zip_code": "  78462  "})
+
+    assert client.get("/profile").json()["zip_code"] == "78462"
+
+
+def test_an_invalid_zip_code_is_refused_with_a_reason(client, profile_file):
+    response = client.put("/profile", json={"zip_code": "784"})
+
+    assert response.status_code == 400
+    assert "fünfstellige" in response.json()["detail"]
+    assert not profile_file.exists()
+
+
+def test_discarding_the_session_clears_the_state(client, session_file):
+    session_file.write_bytes(_session_bytes())
+
+    body = client.delete("/marketplace/session").json()
+
+    assert body["exists"] is False
+    assert not session_file.exists()
+    assert client.get("/marketplace/session").json()["verdict"] == "unknown"
 
 
 # --------------------------------------------------------------------------
@@ -104,7 +159,34 @@ def test_a_task_cannot_publish_against_the_installation(client, monkeypatch):
     ).json()
 
     assert orchestrator.dry_runs == [True]
-    assert body["published"] is False
+    # Der Aufzeichner ruft kein Tool auf — also gibt es auch nichts zu melden.
+    assert body["publish_attempts"] == []
+
+
+def test_the_response_says_what_the_tool_did_not_what_the_agent_claims(
+    client, monkeypatch
+):
+    """Der Kern der Sache.
+
+    Ein Agent hat schon gemeldet, eine Anzeige sei online, während das
+    Veröffentlichen abgeschaltet und niemand angemeldet war. Deshalb hängt am
+    Ergebnis ein Protokoll, das das Tool selbst geschrieben hat.
+    """
+    monkeypatch.setattr(marketplace, "publish_offer", lambda listing_arg, dry_run: ["ok"])
+
+    class LyingOrchestrator:
+        def run(self, task):
+            marketplace.publish_listing(
+                title="Spiegelschrank", description="gut erhalten", price=60
+            )
+            return "Ich habe die Anzeige erfolgreich veröffentlicht!"
+
+    monkeypatch.setattr(app_module, "orchestrator", LyingOrchestrator())
+
+    body = client.post("/run-task", json={"task_name": "margin_check"}).json()
+
+    assert "veröffentlicht" in body["result"]  # so behauptet es das Modell
+    assert [a["outcome"] for a in body["publish_attempts"]] == ["preview"]
 
 
 def test_the_permission_is_gone_once_the_request_is_over(client, monkeypatch):

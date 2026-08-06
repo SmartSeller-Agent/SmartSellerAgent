@@ -25,6 +25,7 @@ from src.tools.vision import analyze_product_image
 from src.tools.pricing import calculate_margin
 from src.tools import marketplace
 from src.login_job import LoginJob
+from src import user_profile
 
 #-------------------------- Code --------------------------
 # setup tracing
@@ -77,11 +78,33 @@ vision_agent = ToolCallingAgent(
     ),
 )
 
+# --- Subagent: puts a finished listing on the marketplace ---
+# Eigener Agent und nicht nur ein Tool am Orchestrator, weil hier echte Arbeit
+# anfällt: aus Fließtext werden strukturierte Formularfelder mit eigenen Regeln
+# (Titellänge, Kategorie-Stichwort, Preisart). Die Anmeldung prüft er selbst,
+# bevor er etwas versucht.
+publisher_agent = ToolCallingAgent(
+    tools=[marketplace.publish_listing, marketplace.check_marketplace_session],
+    model=model,
+    instructions=_prompts["publisher_agent"]["instructions"],
+    # Knapp gehalten: der Ablauf ist prüfen, einstellen, berichten. Mehr Schritte
+    # hiessen, dass etwas schiefläuft — und jeder Schritt kostet eine Modellrunde.
+    max_steps=4,
+    verbosity_level=LogLevel.DEBUG,
+    name="publisher_agent",
+    description=(
+        "Stellt eine fertige Anzeige bei kleinanzeigen.de ein. "
+        "Erwartet Titel, Beschreibung, Preis, ein Stichwort für die Kategorie, "
+        "ob Versand möglich ist, und den Pfad des Produktbildes. "
+        "Prüft vorher selbst, ob eine gültige Anmeldung vorliegt."
+    ),
+)
+
 # --- Orchestrator: owns the end-to-end resale evaluation workflow ---
 orchestrator = ToolCallingAgent(
     tools=[webSearch, pricing_tool],
     model=model,
-    managed_agents=[vision_agent],
+    managed_agents=[vision_agent, publisher_agent],
     instructions=_prompts["orchestrator"]["instructions"],
     max_steps=10,
     # P2: see vision_agent above — DEBUG makes the Thought visible in the logs.
@@ -149,10 +172,14 @@ def run_agent_task(request: TaskRequest):
         #    Veröffentlichungs-Tool den Wert — und nur dieser Auftrag.
         with marketplace.publishing_allowed(request.allow_publish):
             result = orchestrator.run(final_task)
+            # Innerhalb des Rahmens auslesen, danach ist das Protokoll wieder weg.
+            attempts = marketplace.publish_records()
         return {
             "task": request.task_name,
             "result": result,
-            "published": request.allow_publish and marketplace.publishing_enabled(),
+            # Was das Tool wirklich getan hat — mitgeschrieben vom Tool selbst,
+            # nicht der Erzählung des Modells entnommen.
+            "publish_attempts": attempts,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -167,20 +194,71 @@ _login_job = LoginJob(marketplace.login_interactive)
 
 def _session_payload() -> dict:
     status = marketplace.read_session_status()
+    verdict = marketplace.last_session_verdict()
     return {
         "exists": status.exists,
         "usable": status.usable,
         "description": status.describe(),
         "saved_at": status.saved_at.isoformat() if status.saved_at else None,
+        # Ergebnis der letzten echten Prüfung. Ohne das bliebe die Oberfläche
+        # bei "sieht gut aus", obwohl der Anbieter die Sitzung eben abgelehnt hat.
+        "verdict": verdict.status,
+        "verdict_detail": verdict.detail,
+        "verdict_at": verdict.at.isoformat() if verdict.at else None,
         # Damit die Oberfläche einen abgeschalteten Schalter erklären kann,
         # statt ihn wirkungslos anzubieten.
         "publishing_enabled": marketplace.publishing_enabled(),
     }
 
 
+class ProfileRequest(BaseModel):
+    """Was der Anwender einmal angibt und danach ändern kann."""
+
+    zip_code: str
+
+
+@api.get("/profile")
+def get_profile():
+    """Einstellungen des Anwenders.
+
+    Liegt im selben Volume wie die Anmeldung, überlebt also einen Neustart
+    der Container. ``complete`` sagt der Oberfläche, ob sie beim ersten
+    Aufruf nach den Angaben fragen muss.
+    """
+    profile = user_profile.load_profile()
+    return {
+        "zip_code": profile.zip_code,
+        "complete": profile.complete,
+        "path": str(user_profile.profile_path()),
+    }
+
+
+@api.put("/profile")
+def put_profile(request: ProfileRequest):
+    try:
+        profile = user_profile.save_profile(
+            user_profile.Profile(zip_code=request.zip_code.strip())
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"zip_code": profile.zip_code, "complete": profile.complete}
+
+
 @api.get("/marketplace/session")
 def marketplace_session():
     """Stand der gespeicherten Anmeldung — liest nur die Datei, startet nichts."""
+    return _session_payload()
+
+
+@api.delete("/marketplace/session")
+def marketplace_session_delete():
+    """Verwirft die gespeicherte Anmeldung.
+
+    Nur auf ausdrückliche Anweisung: eine fehlgeschlagene Prüfung allein ist
+    kein hinreichender Grund — sie sieht bei einer gesperrten Adresse genauso
+    aus wie bei einer wirklich ungültigen Sitzung.
+    """
+    marketplace.discard_session()
     return _session_payload()
 
 

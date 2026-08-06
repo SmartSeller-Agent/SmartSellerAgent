@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from src import user_profile
 from src.tools import marketplace
 from src.tools.marketplace import Listing, SessionExpiredError, SessionMissingError
 
@@ -335,6 +336,14 @@ def no_screenshots_on_disk(monkeypatch, tmp_path):
     monkeypatch.setattr(marketplace, "SCREENSHOT_DIR", tmp_path / "screenshots")
 
 
+@pytest.fixture(autouse=True)
+def isolated_profile(monkeypatch, tmp_path):
+    """Das echte Profil des Entwicklers darf in Tests nicht mitreden."""
+    path = tmp_path / "profile.json"
+    monkeypatch.setattr(user_profile, "PROFILE_FILE", path)
+    return path
+
+
 # --------------------------------------------------------------------------
 # Validierung
 # --------------------------------------------------------------------------
@@ -625,11 +634,10 @@ def test_tool_defaults_to_dry_run(monkeypatch, listing):
         title=listing.title,
         description=listing.description,
         price=listing.price,
-        zip_code=listing.zip_code,
     )
 
     assert seen["dry_run"] is True
-    assert "Probelauf" in result
+    assert result.startswith("PROBELAUF")
 
 
 def test_tool_publishes_only_when_both_switches_agree(monkeypatch, listing):
@@ -649,7 +657,6 @@ def test_tool_publishes_only_when_both_switches_agree(monkeypatch, listing):
             title=listing.title,
             description=listing.description,
             price=listing.price,
-            zip_code=listing.zip_code,
             image_paths=f"{listing.image_paths[0]}, {listing.image_paths[0]}",
             category="Badezimmer",
         )
@@ -657,7 +664,213 @@ def test_tool_publishes_only_when_both_switches_agree(monkeypatch, listing):
     assert seen["dry_run"] is False
     assert seen["images"] == [listing.image_paths[0], listing.image_paths[0]]
     assert seen["category"] == "Badezimmer"
-    assert "Veröffentlichung" in result
+    assert result.startswith("VERÖFFENTLICHT")
+
+
+def test_the_location_comes_from_the_profile_not_from_the_model(
+    monkeypatch, listing, isolated_profile
+):
+    """Die PLZ des Anwenders kann ein Sprachmodell nicht wissen.
+
+    Sie steht deshalb nicht in der Tool-Signatur — es gibt keinen Weg, sie
+    falsch zu raten.
+    """
+    user_profile.save_profile(user_profile.Profile(zip_code="10115"))
+    seen = {}
+
+    def fake_publish_offer(listing_arg, dry_run):
+        seen["zip"] = listing_arg.zip_code
+        return ["ok"]
+
+    monkeypatch.setattr(marketplace, "publish_offer", fake_publish_offer)
+
+    marketplace.publish_listing(
+        title=listing.title, description=listing.description, price=listing.price
+    )
+
+    assert seen["zip"] == "10115"
+    # Das Modell bekommt das Feld gar nicht erst angeboten.
+    assert "zip_code" not in marketplace.publish_listing.inputs
+
+
+def test_without_a_profile_the_sites_own_prefill_is_left_alone(listing):
+    """Ohne PLZ wird das Feld nicht angefasst statt den Lauf abzubrechen.
+
+    Die Website belegt es aus dem Konto vor — das ist besser als nichts.
+    """
+    listing.zip_code = ""
+    page = FakePage()
+
+    assert listing.validate() == []
+
+    log = marketplace.fill_offer_form(page, listing, dry_run=True)
+
+    assert 'input[id="ad-zip-code"]' not in page.filled
+    assert any("Vorbelegung aus dem Konto" in line for line in log)
+
+
+# --------------------------------------------------------------------------
+# Was wirklich passiert ist — nicht was das Modell erzählt
+# --------------------------------------------------------------------------
+def test_a_preview_is_recorded_as_a_preview(monkeypatch, listing):
+    monkeypatch.setattr(marketplace, "publish_offer", lambda listing_arg, dry_run: ["ok"])
+
+    with marketplace.publishing_allowed(False):
+        result = marketplace.publish_listing(
+            title=listing.title, description=listing.description, price=listing.price
+        )
+        records = marketplace.publish_records()
+
+    assert [r["outcome"] for r in records] == [marketplace.PREVIEW]
+    # Auch der Text an den Agenten muss eindeutig sein.
+    assert result.startswith("PROBELAUF")
+
+
+def test_a_real_publication_is_recorded_as_one(monkeypatch, listing):
+    monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "true")
+    monkeypatch.setattr(marketplace, "publish_offer", lambda listing_arg, dry_run: ["ok"])
+
+    with marketplace.publishing_allowed(True):
+        result = marketplace.publish_listing(
+            title=listing.title, description=listing.description, price=listing.price
+        )
+        records = marketplace.publish_records()
+
+    assert [r["outcome"] for r in records] == [marketplace.PUBLISHED]
+    assert result.startswith("VERÖFFENTLICHT")
+
+
+def test_nothing_recorded_means_the_tool_was_never_called():
+    """Der Fall, in dem ein Agent behauptet, er habe etwas eingestellt.
+
+    Die leere Liste ist der Gegenbeweis, mit dem die Oberfläche widersprechen
+    kann.
+    """
+    with marketplace.publishing_allowed(True):
+        assert marketplace.publish_records() == []
+
+
+def test_a_missing_login_is_recorded_and_not_dressed_up(monkeypatch, listing):
+    def rejected(listing_arg, dry_run):
+        raise SessionExpiredError("Sitzung wird nicht mehr akzeptiert")
+
+    monkeypatch.setattr(marketplace, "publish_offer", rejected)
+
+    with marketplace.publishing_allowed(True):
+        result = marketplace.publish_listing(
+            title=listing.title, description=listing.description, price=listing.price
+        )
+        records = marketplace.publish_records()
+
+    assert [r["outcome"] for r in records] == [marketplace.NOT_LOGGED_IN]
+    assert result.startswith("Anzeige NICHT erstellt")
+    # Und die Ablehnung merkt sich die Anwendung für die Anzeige im Frontend.
+    assert marketplace.last_session_verdict().status == marketplace.REJECTED
+
+
+def test_unusable_input_is_recorded_without_starting_a_browser(monkeypatch):
+    monkeypatch.setattr(
+        marketplace,
+        "publish_offer",
+        lambda *_a, **_k: pytest.fail("Browser darf nicht starten"),
+    )
+
+    with marketplace.publishing_allowed(True):
+        marketplace.publish_listing(title="", description="", price=1)
+        records = marketplace.publish_records()
+
+    assert [r["outcome"] for r in records] == [marketplace.INVALID]
+
+
+def test_the_record_does_not_survive_the_request(monkeypatch, listing):
+    monkeypatch.setattr(marketplace, "publish_offer", lambda listing_arg, dry_run: ["ok"])
+
+    with marketplace.publishing_allowed(False):
+        marketplace.publish_listing(
+            title=listing.title, description=listing.description, price=listing.price
+        )
+
+    # Ausserhalb des Rahmens gibt es nichts mehr zu berichten — sonst zeigte
+    # der nächste Auftrag das Ergebnis des vorherigen.
+    assert marketplace.publish_records() == []
+
+
+# --------------------------------------------------------------------------
+# Gedächtnis für die letzte echte Anmeldeprüfung
+# --------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def forget_previous_verdict():
+    marketplace.record_session_verdict(marketplace.UNKNOWN, "")
+
+
+def test_a_successful_check_is_remembered(use_fake_browser):
+    use_fake_browser(FakePage())
+
+    marketplace.verify_session_online()
+
+    assert marketplace.last_session_verdict().status == marketplace.ACCEPTED
+
+
+def test_a_rejected_check_is_remembered(use_fake_browser):
+    """Ohne das zeigte die Oberfläche weiter grün, direkt nach der Absage."""
+    use_fake_browser(FakePage(logged_in=False))
+
+    with pytest.raises(SessionExpiredError):
+        marketplace.verify_session_online()
+
+    verdict = marketplace.last_session_verdict()
+    assert verdict.status == marketplace.REJECTED
+    assert verdict.at is not None
+
+
+def test_an_unclear_check_is_not_counted_as_good(use_fake_browser):
+    use_fake_browser(FakePage(shows_logout_link=False))
+
+    marketplace.verify_session_online()
+
+    assert marketplace.last_session_verdict().status == marketplace.UNKNOWN
+
+
+def test_a_rejected_check_does_not_delete_anything(session_file, use_fake_browser):
+    """Löschen wäre unumkehrbar, die Diagnose ist es nicht.
+
+    Eine Umleitung zur Anmeldeseite erscheint auch bei gesperrter Adresse oder
+    einer Störung beim Anbieter — dann wäre eine intakte Anmeldung weg.
+    """
+    _write_session(session_file, [{"name": "auth", "expires": time.time() + 3600}])
+    use_fake_browser(FakePage(logged_in=False))
+
+    with pytest.raises(SessionExpiredError):
+        marketplace.verify_session_online()
+
+    assert session_file.exists()
+
+
+def test_discarding_is_explicit_and_forgets_the_verdict(session_file):
+    _write_session(session_file, [{"name": "auth", "expires": time.time() + 3600}])
+    marketplace.record_session_verdict(marketplace.REJECTED, "abgelehnt")
+
+    status = marketplace.discard_session()
+
+    assert not session_file.exists()
+    assert status.exists is False
+    assert marketplace.last_session_verdict().status == marketplace.UNKNOWN
+
+
+def test_discarding_a_session_that_is_not_there_is_harmless(session_file):
+    assert marketplace.discard_session().exists is False
+
+
+def test_an_imported_session_starts_out_unchecked(session_file, tmp_path):
+    """Die Bewertung der alten Datei darf nicht auf die neue abfärben."""
+    marketplace.record_session_verdict(marketplace.ACCEPTED, "alte Sitzung war gut")
+    source = _write_session(
+        tmp_path / "neu.json", [{"name": "auth", "expires": time.time() + 3600}]
+    )
+
+    marketplace.import_session(source)
+
+    assert marketplace.last_session_verdict().status == marketplace.UNKNOWN
 
 
 # --------------------------------------------------------------------------
@@ -732,9 +945,7 @@ def test_tool_returns_validation_problems_without_opening_a_browser(monkeypatch)
 
     monkeypatch.setattr(marketplace, "publish_offer", fail)
 
-    result = marketplace.publish_listing(
-        title="", description="x", price=1, zip_code="784"
-    )
+    result = marketplace.publish_listing(title="", description="x", price=1)
 
     assert "bitte korrigieren" in result
     assert "Titel ist leer" in result
@@ -1034,8 +1245,9 @@ def test_tool_reports_login_problems_as_something_a_human_must_fix(
         title=listing.title,
         description=listing.description,
         price=listing.price,
-        zip_code=listing.zip_code,
     )
 
-    assert result.startswith("Nicht angemeldet")
+    # Die erste Zeile sagt unmissverständlich, dass nichts entstanden ist —
+    # der publisher_agent gibt genau sie wörtlich weiter.
+    assert result.startswith("Anzeige NICHT erstellt")
     assert str(error) in result

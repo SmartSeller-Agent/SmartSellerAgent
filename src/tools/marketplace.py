@@ -63,6 +63,7 @@ from src.config import (
     KLEINANZEIGEN_STATE_DIR,
     KLEINANZEIGEN_TIMEZONE,
 )
+from src.user_profile import load_profile
 
 # Kurze Namen fürs Modul. Ein Alias statt eines zweiten Env-Zugriffs, damit die
 # Auswertung von .env an genau einer Stelle passiert (src/config.py).
@@ -163,6 +164,36 @@ class SessionStatus:
         return " ".join(lines)
 
 
+# Ergebnis der letzten echten Prüfung gegen den Anbieter.
+#
+# Die Datei allein sagt nur, dass Cookies noch nicht abgelaufen sind. Ob der
+# Anbieter sie akzeptiert, weiß man erst nach einem Versuch — und dieses
+# Wissen soll nicht sofort wieder verloren gehen, sonst zeigt die Oberfläche
+# weiter "in Ordnung", obwohl die Prüfung eben abgelehnt wurde.
+UNKNOWN = "unknown"
+ACCEPTED = "accepted"
+REJECTED = "rejected"
+
+
+@dataclass(frozen=True)
+class SessionVerdict:
+    status: str = UNKNOWN
+    detail: str = ""
+    at: Optional[datetime] = None
+
+
+_last_verdict = SessionVerdict()
+
+
+def record_session_verdict(status: str, detail: str = "") -> None:
+    global _last_verdict
+    _last_verdict = SessionVerdict(status=status, detail=detail, at=datetime.now())
+
+
+def last_session_verdict() -> SessionVerdict:
+    return _last_verdict
+
+
 def read_session_status(path: Optional[Path] = None) -> SessionStatus:
     """Liest die gespeicherte Anmeldung, ohne sie zu benutzen.
 
@@ -222,6 +253,22 @@ def import_session(source: Path) -> SessionStatus:
 
     SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
     SESSION_FILE.write_bytes(Path(source).read_bytes())
+    # Eine neue Datei ist ungeprüft — die Bewertung der alten gilt nicht weiter.
+    record_session_verdict(UNKNOWN, "Übernommene Anmeldung ist noch ungeprüft.")
+    return read_session_status()
+
+
+def discard_session() -> SessionStatus:
+    """Wirft die gespeicherte Anmeldung weg.
+
+    Bewusst nur auf ausdrückliche Anweisung und nicht automatisch, sobald eine
+    Prüfung fehlschlägt: Eine Umleitung zur Anmeldeseite bedeutet nicht
+    zwingend, dass die Sitzung ungültig ist — dieselbe Seite erscheint bei
+    einer vorübergehenden Sperre des Adressbereichs oder einer Störung beim
+    Anbieter. Das Löschen wäre unumkehrbar, die Diagnose ist es nicht.
+    """
+    SESSION_FILE.unlink(missing_ok=True)
+    record_session_verdict(UNKNOWN, "Anmeldung wurde verworfen.")
     return read_session_status()
 
 
@@ -260,15 +307,53 @@ def _ensure_logged_in(page) -> None:
 # fremde Anfrage lecken.
 _publish_allowed = contextvars.ContextVar("kleinanzeigen_publish_allowed", default=False)
 
+# Was das Tool tatsächlich getan hat, mitgeschrieben vom Tool selbst.
+#
+# Der Grund: ein Sprachmodell darf nicht die einzige Quelle darüber sein, ob
+# eine öffentliche Anzeige entstanden ist. Es kann sich irren oder das
+# Ergebnis beschönigen — beobachtet und beides erlebt. Die Anwendung weiß es
+# genau und soll es auch berichten.
+_publish_records = contextvars.ContextVar("kleinanzeigen_publish_records", default=None)
+
+# Mögliche Ausgänge eines Tool-Aufrufs.
+PUBLISHED = "published"      # eine öffentliche Anzeige ist entstanden
+PREVIEW = "preview"          # Formular ausgefüllt, nicht abgesendet
+NOT_LOGGED_IN = "not_logged_in"
+INVALID = "invalid"          # Angaben des Modells unbrauchbar
+FAILED = "failed"
+
 
 @contextmanager
 def publishing_allowed(allowed: bool):
-    """Gibt das Veröffentlichen für die Dauer eines Auftrags frei."""
-    token = _publish_allowed.set(bool(allowed))
+    """Rahmen für genau einen Auftrag.
+
+    Gibt das Veröffentlichen frei oder eben nicht und beginnt ein frisches
+    Protokoll der Tool-Aufrufe.
+    """
+    allowed_token = _publish_allowed.set(bool(allowed))
+    records_token = _publish_records.set([])
     try:
         yield
     finally:
-        _publish_allowed.reset(token)
+        _publish_allowed.reset(allowed_token)
+        _publish_records.reset(records_token)
+
+
+def publish_records() -> List[dict]:
+    """Was innerhalb des laufenden Auftrags versucht wurde.
+
+    Eine leere Liste heißt: das Tool wurde gar nicht aufgerufen. Behauptet der
+    Agent dann trotzdem, er habe etwas eingestellt, ist das nachweislich falsch.
+    """
+    records = _publish_records.get()
+    return list(records) if records is not None else []
+
+
+def _record(outcome: str, detail: str = "") -> str:
+    records = _publish_records.get()
+    if records is not None:
+        records.append({"outcome": outcome, "detail": detail})
+    return outcome
 
 
 def publishing_enabled() -> bool:
@@ -331,7 +416,9 @@ class Listing:
         if self.price < 0:
             problems.append("Preis darf nicht negativ sein.")
 
-        if not re.fullmatch(r"\d{5}", self.zip_code):
+        # Leer ist erlaubt: dann bleibt stehen, was die Website aus dem
+        # Kontoprofil vorbelegt hat.
+        if self.zip_code and not re.fullmatch(r"\d{5}", self.zip_code):
             problems.append(f"PLZ '{self.zip_code}' ist keine fünfstellige Zahl.")
 
         if self.price_type not in PRICE_TYPES:
@@ -407,8 +494,9 @@ def _verify_form_state(page, listing: Listing, log: List[str]) -> None:
     expected = {
         'input[id="ad-title"]': listing.title,
         'textarea[id="ad-description"]': listing.description,
-        'input[id="ad-zip-code"]': listing.zip_code,
     }
+    if listing.zip_code:
+        expected['input[id="ad-zip-code"]'] = listing.zip_code
 
     drifted = []
     for selector, want in expected.items():
@@ -625,6 +713,10 @@ def _upload_images(page, listing: Listing, log: List[str]) -> None:
 
 
 def _fill_zip(page, listing: Listing, log: List[str]) -> None:
+    if not listing.zip_code:
+        log.append("Keine PLZ angegeben — die Vorbelegung aus dem Konto bleibt stehen.")
+        return
+
     field_ = page.locator('input[id="ad-zip-code"]')
     field_.wait_for(state="visible", timeout=FIELD_TIMEOUT_MS)
     _fill_verified(page, field_, listing.zip_code, "PLZ")
@@ -843,6 +935,8 @@ def login_interactive(timeout_s: Optional[int] = None, notify=None) -> List[str]
             if not _is_login_page(page.url) and _has_logout_link(page):
                 SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
                 page.context.storage_state(path=str(SESSION_FILE))
+                # Gerade eben mit eigenen Augen gesehen.
+                record_session_verdict(ACCEPTED, "Soeben angemeldet.")
                 say(f"Angemeldet. Sitzung gespeichert unter {SESSION_FILE}.")
                 say(read_session_status().describe())
                 return log
@@ -869,15 +963,18 @@ def verify_session_online() -> List[str]:
         page.goto(MY_ADS_URL)
         if _is_login_page(page.url):
             _screenshot(page, "10_session_rejected.png")
-            raise SessionExpiredError(
+            message = (
                 "Die Website hat auf die Anmeldeseite umgeleitet — die Sitzung "
                 "wird nicht mehr akzeptiert."
             )
+            record_session_verdict(REJECTED, message)
+            raise SessionExpiredError(message)
 
         _accept_cookies(page, log)
 
         if _has_logout_link(page):
             log.append("Angemeldet — die Sitzung ist gültig.")
+            record_session_verdict(ACCEPTED, log[-1])
             return log
 
         _screenshot(page, "10_session_unclear.png")
@@ -885,6 +982,8 @@ def verify_session_online() -> List[str]:
             "Kein Abmelde-Link gefunden, aber auch keine Umleitung zur Anmeldung. "
             "Zustand unklar — bitte screenshots/10_session_unclear.png prüfen."
         )
+        # Ausdrücklich nicht als "in Ordnung" verbuchen: unklar ist nicht gut.
+        record_session_verdict(UNKNOWN, log[-1])
         return log
 
 
@@ -923,7 +1022,6 @@ def publish_listing(
     title: str,
     description: str,
     price: float,
-    zip_code: str,
     image_paths: Optional[str] = None,
     price_type: str = "FIXED",
     shipping: bool = False,
@@ -939,17 +1037,18 @@ def publish_listing(
         title: Überschrift der Anzeige, höchstens 65 Zeichen.
         description: Beschreibungstext der Anzeige, auf Deutsch.
         price: Preis in Euro. Bei price_type 'GIVE_AWAY' wird der Wert ignoriert.
-        zip_code: Fünfstellige Postleitzahl des Standorts, zum Beispiel '78462'.
         image_paths: Bilddateien, mehrere durch Komma getrennt. Leer lassen, wenn keine vorliegen.
         price_type: 'FIXED' für Festpreis, 'NEGOTIABLE' für Verhandlungsbasis, 'GIVE_AWAY' zum Verschenken.
         shipping: True, wenn Versand möglich ist, False für 'Nur Abholung'.
         category: Stichwort zur gewünschten Kategorie, zum Beispiel 'Badezimmer'. Die Website schlägt anhand des Titels Kategorien vor; passt keine, wird die erste genommen.
     """
+    # Der Standort kommt aus dem Profil des Anwenders, nicht aus dem Modell:
+    # seine Postleitzahl kann es nicht wissen und soll sie nicht raten.
     listing = Listing(
         title=title,
         description=description,
         price=price,
-        zip_code=zip_code,
+        zip_code=load_profile().zip_code,
         image_paths=_parse_image_paths(image_paths or ""),
         price_type=price_type,
         shipping=shipping,
@@ -959,7 +1058,9 @@ def publish_listing(
     problems = listing.validate()
     if problems:
         # Als Text zurückgeben, nicht werfen: der Agent kann so nachbessern.
-        return "Anzeige nicht erstellt, bitte korrigieren:\n- " + "\n- ".join(problems)
+        detail = "\n- ".join(problems)
+        _record(INVALID, detail)
+        return f"Anzeige NICHT erstellt, bitte korrigieren:\n- {detail}"
 
     dry_run = is_dry_run()
     try:
@@ -967,12 +1068,24 @@ def publish_listing(
     except (SessionMissingError, SessionExpiredError) as e:
         # Eigener Zweig, weil hier ein Mensch handeln muss: erneut anmelden.
         # Ein Wiederholungsversuch des Agenten wäre sinnlos.
-        return f"Nicht angemeldet, Anzeige nicht erstellt. {e}"
+        record_session_verdict(REJECTED, str(e))
+        _record(NOT_LOGGED_IN, str(e))
+        return f"Anzeige NICHT erstellt: nicht angemeldet. {e}"
     except Exception as e:
-        return f"Fehler beim Veröffentlichen: {e}"
+        _record(FAILED, str(e))
+        return f"Anzeige NICHT erstellt, Fehler beim Veröffentlichen: {e}"
 
-    mode = "Probelauf (nicht veröffentlicht)" if dry_run else "Veröffentlichung"
-    return f"{mode}\n" + "\n".join(log)
+    if dry_run:
+        _record(PREVIEW)
+        headline = (
+            "PROBELAUF — die Anzeige wurde NICHT veröffentlicht. "
+            "Das Formular wurde nur ausgefüllt."
+        )
+    else:
+        _record(PUBLISHED)
+        headline = "VERÖFFENTLICHT — die Anzeige ist jetzt öffentlich sichtbar."
+
+    return f"{headline}\n" + "\n".join(log)
 
 
 # --------------------------------------------------------------------------

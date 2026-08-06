@@ -62,6 +62,27 @@ In both cases the same URLs are served once the stack is up:
 | http://localhost:8501 | **Streamlit web UI** — upload a photo, get a listing |
 | http://localhost:8000/docs | Interactive API documentation (Swagger) |
 | http://localhost:8000/health | Health endpoint (W11) |
+| http://localhost:6080/vnc.html | The browser the agent drives, live — see below |
+
+### Publishing to kleinanzeigen.de
+
+The site has no API, so the agent drives a real browser through the offer form.
+Two things follow from that, and both are visible in the UI:
+
+**You log in yourself.** The site puts a security check and two-factor prompt in
+front of the login, which no script can solve. The container therefore runs a
+browser on a virtual screen and streams it to `localhost:6080`, where you sign in
+once by hand. No password is ever asked for or stored — only the resulting
+session, in a volume that survives `docker compose down`. The same view lets you
+watch the agent fill in the form later.
+
+**Nothing goes live by accident.** A published ad cannot be taken back, so it
+takes two switches: `KLEINANZEIGEN_ALLOW_PUBLISH=true` in `.env` (the operator
+allows it at all) *and* the checkbox in the UI (this one run is meant to go
+live). Either one missing means the form is only filled in and a screenshot is
+written. Neither switch is visible to the language model, and the result shown
+in the UI comes from the tool's own record — not from what the agent says it
+did.
 
 Run only one of the two stacks at a time; both use the same container names, so
 stop the other with `docker compose down` first.

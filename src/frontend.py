@@ -18,6 +18,7 @@ import streamlit as st
 # Servicenamen: http://api:8000
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 RUN_TASK_URL = f"{API_BASE_URL}/run-task"
+PROFILE_URL = f"{API_BASE_URL}/profile"
 SESSION_URL = f"{API_BASE_URL}/marketplace/session"
 VERIFY_URL = f"{API_BASE_URL}/marketplace/session/verify"
 LOGIN_URL = f"{API_BASE_URL}/marketplace/login"
@@ -63,6 +64,46 @@ def _call(method: str, url: str, **kwargs):
 
 
 # --------------------------------------------------------------------------
+# Einstellungen des Anwenders
+# --------------------------------------------------------------------------
+def _save_profile(zip_code: str, container) -> bool:
+    ok, result = _call(
+        "PUT", PROFILE_URL, json={"zip_code": zip_code}, timeout=QUICK_TIMEOUT_S
+    )
+    if ok:
+        container.success("Gespeichert.")
+        return True
+    container.error(result)
+    return False
+
+
+def render_first_run_setup() -> None:
+    """Wird beim ersten Aufruf gezeigt, solange Angaben fehlen."""
+    st.subheader("Einmalige Einrichtung")
+    st.write(
+        "Bevor Anzeigen erstellt werden können, fehlt noch dein Standort. "
+        "Er steht später in jeder Anzeige und lässt sich jederzeit in der "
+        "Seitenleiste ändern."
+    )
+    zip_code = st.text_input("Postleitzahl", max_chars=5, placeholder="78462")
+    if st.button("Speichern") and _save_profile(zip_code, st):
+        st.rerun()
+
+
+def render_profile_settings(sidebar, profile: dict) -> None:
+    with sidebar.expander("Einstellungen"):
+        st.caption(
+            "Bleibt erhalten, bis der Docker-Aufbau samt Volumes entfernt wird "
+            "— wie die Anmeldung."
+        )
+        zip_code = st.text_input(
+            "Postleitzahl", value=profile.get("zip_code", ""), max_chars=5
+        )
+        if st.button("Änderung speichern") and _save_profile(zip_code, st):
+            st.rerun()
+
+
+# --------------------------------------------------------------------------
 # Seitenleiste: Anmeldung beim Marktplatz
 # --------------------------------------------------------------------------
 def render_login_progress(sidebar) -> None:
@@ -93,23 +134,44 @@ def render_session_sidebar():
         sidebar.error(session)
         return None
 
-    # Bewusst nicht "Angemeldet": diese Auskunft stammt allein aus der Datei
-    # und ihren Cookie-Ablaufzeiten. Ob der Anbieter die Sitzung noch
-    # akzeptiert, sagt erst die Prüfung weiter unten.
-    if session["usable"]:
-        sidebar.success("Anmeldung gespeichert")
-    else:
+    # Grün gibt es nur nach einer echten Prüfung. Die Datei allein sagt bloß,
+    # dass Cookies noch nicht abgelaufen sind — das hat schon einmal "in
+    # Ordnung" gemeldet, während der Anbieter die Sitzung längst abgelehnt hatte.
+    verdict = session.get("verdict", "unknown")
+    if not session["usable"]:
         sidebar.warning("Keine gültige Anmeldung")
-    sidebar.caption(session["description"])
+    elif verdict == "accepted":
+        sidebar.success("Angemeldet und geprüft")
+    elif verdict == "rejected":
+        sidebar.error("Anmeldung wird nicht mehr akzeptiert — bitte neu anmelden")
+    else:
+        sidebar.info("Anmeldung vorhanden, aber ungeprüft")
+
+    if session.get("verdict_detail"):
+        sidebar.caption(session["verdict_detail"])
+
+    # Die Cookie-Bilanz nur zeigen, solange sie etwas Nützliches aussagt. Nach
+    # einer Absage würde "7 Cookies gültig" der roten Meldung direkt darüber
+    # widersprechen.
+    if verdict != "rejected":
+        sidebar.caption(session["description"])
 
     if sidebar.button("Anmeldung prüfen", use_container_width=True):
         with st.spinner("Ruft eine geschützte Seite auf …"):
-            ok, result = _call("POST", VERIFY_URL, timeout=VERIFY_TIMEOUT_S)
-        if ok:
-            for message in result["messages"]:
-                sidebar.success(message)
-        else:
-            sidebar.error(result)
+            _call("POST", VERIFY_URL, timeout=VERIFY_TIMEOUT_S)
+        # Neu zeichnen, damit die Kopfzeile das Ergebnis zeigt und nicht mehr
+        # den Stand von vor der Prüfung.
+        st.rerun()
+
+    # Nur anbieten, wenn die Anmeldung ohnehin nichts mehr taugt. Eine
+    # funktionierende soll man nicht mit einem Fehlklick verlieren.
+    if session["exists"] and (verdict == "rejected" or not session["usable"]):
+        if sidebar.button("Anmeldung verwerfen", use_container_width=True):
+            ok, result = _call("DELETE", SESSION_URL, timeout=QUICK_TIMEOUT_S)
+            if not ok:
+                sidebar.error(result)
+            else:
+                st.rerun()
 
     sidebar.markdown(
         "Die Anmeldung läuft von Hand ab: Sicherheitsabfrage und "
@@ -161,12 +223,62 @@ def render_session_sidebar():
 
 
 # --------------------------------------------------------------------------
+# Was tatsächlich passiert ist
+# --------------------------------------------------------------------------
+def render_publish_outcome(attempts: list) -> None:
+    """Zeigt den Ausgang so an, wie das Tool ihn protokolliert hat.
+
+    Bewusst nicht aus dem Text des Agenten abgeleitet: Ein Sprachmodell hat
+    hier schon berichtet, eine Anzeige sei online gegangen, obwohl das
+    Veröffentlichen abgeschaltet und niemand angemeldet war. Was mit einer
+    unumkehrbaren Aktion geschehen ist, darf nicht Erzählung sein.
+    """
+    if not attempts:
+        st.warning(
+            "Es wurde **keine** Anzeige eingestellt — der Agent hat das "
+            "Veröffentlichungs-Tool gar nicht aufgerufen. Falls der Text unten "
+            "etwas anderes behauptet, gilt diese Meldung.",
+            icon="⚠️",
+        )
+        return
+
+    for attempt in attempts:
+        outcome = attempt.get("outcome")
+        detail = attempt.get("detail", "")
+
+        if outcome == "published":
+            st.success("Die Anzeige ist online und öffentlich sichtbar.", icon="✅")
+        elif outcome == "preview":
+            st.info(
+                "Probelauf: Das Formular wurde ausgefüllt, aber **nicht** "
+                "abgesendet. Es ist keine Anzeige entstanden.",
+                icon="👀",
+            )
+        elif outcome == "not_logged_in":
+            st.error(f"Keine Anzeige erstellt — nicht angemeldet. {detail}", icon="🔒")
+        elif outcome == "invalid":
+            st.error(f"Keine Anzeige erstellt — die Angaben waren unbrauchbar:\n\n{detail}")
+        else:
+            st.error(f"Keine Anzeige erstellt — Fehler: {detail}")
+
+
+# --------------------------------------------------------------------------
 # Hauptbereich: Anzeige erstellen
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="SmartSeller Agent", page_icon="🛍️")
 st.title("🛍️ SmartSeller")
 
 session = render_session_sidebar()
+
+profile_ok, profile = _call("GET", PROFILE_URL, timeout=QUICK_TIMEOUT_S)
+if profile_ok:
+    render_profile_settings(st.sidebar, profile)
+
+# Solange die Angaben fehlen, hat der Hauptablauf keinen Sinn — die Anzeige
+# bekäme keinen Standort.
+if profile_ok and not profile["complete"]:
+    render_first_run_setup()
+    st.stop()
 
 st.write(
     "Lade ein Bild deines Artikels hoch. Der Agent erkennt das Produkt, "
@@ -216,7 +328,9 @@ if uploaded_file is not None:
                 "POST",
                 RUN_TASK_URL,
                 json={
-                    "task_name": "create_listing",
+                    # Der Ablauf endet mit dem Einstellen. Ob dabei wirklich
+                    # etwas online geht, entscheidet allein allow_publish.
+                    "task_name": "create_and_publish_listing",
                     "image_path": str(file_path.absolute()),
                     "purchase_price": 0.0,
                     "allow_publish": allow_publish,
@@ -225,7 +339,7 @@ if uploaded_file is not None:
             )
 
         if ok:
-            st.success("Anzeige erfolgreich generiert!")
+            render_publish_outcome(result.get("publish_attempts", []))
             st.markdown("### Dein Anzeigentext:")
             st.info(result.get("result", "Kein Text generiert."))
         else:
