@@ -1,7 +1,47 @@
+<a id="readme-top"></a>
+
+<div align="center">
+
 # SmartSellerAgent
+**A photo goes in, a finished marketplace listing comes out.**
+
+<!-- Project Shields -->
+[![CI][ci-shield]][ci-url] [![Python][python-shield]][python-url] [![Docker][docker-shield]][docker-url] [![smolagents][smolagents-shield]][smolagents-url] [![Contributors][contributing-shield]][contributing-url]
+
+</div>
+
+
+<!-- Project Logo -->
+<br />
+<div align="center">
+  <a href="https://github.com/SmartSeller-Agent/SmartSellerAgent">
+    <img src="docs/figures/logo_2.png" alt="Logo" width="100" height="100">
+  </a>
+  <br>
+  Explore the documentation below!
+  
+  [![Architecture][architecture-shield]][architecture-url] [![Requirements][requirements-shield]][requirements-url] [![Performance][performance-shield]][performance-url]
+</div>
+
+
 
 ## About the project
-@TODO: Add a brief description of the project.
+
+Selling a used item online is mostly clerical work: figure out what the thing actually is, look up what comparable ones go for, decide on a price, write a title and a description that read well, and then type all of it into a form. 
+
+SmartSellerAgent does that from a single photo.
+
+You upload the picture, thats it. From there a multi-agent system takes over: a vision agent identifies the product, brand and condition; the orchestrator researches realistic second-hand prices with a web search and writes the ad in German. If you ask it to, a publisher agent then drives a real browser through the kleinanzeigen.de offer form and fills everything in, the last click stays yours unless you explicitly hand it over.
+
+
+## Contents
+
+- [Requirements](#requirements) — what you need installed
+- [Configuration](#configuration) — the `.env` file and what is in it
+- [How to Run](#how-to-run) — hosted models (A1) or local models (A2)
+- [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende) — login and the two publish switches
+- [Architecture Overview](#architecture-overview) — how the parts fit together
+- [Documentation](#documentation) — the detailed docs in `docs/`
 
 ## Requirements
 
@@ -215,3 +255,21 @@ The system is built on the principles of a Service-Oriented Architecture (SOA) a
 | [docs/reflection-w13-continuous-learning.md](docs/reflection-w13-continuous-learning.md) | Continuous learning (W13) |
 | [docs/reflection-w14-responsible-ai.md](docs/reflection-w14-responsible-ai.md) | Responsible AI (W14) |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Development setup, tests, branch workflow |
+
+<!-- MARKDOWN LINKS & IMAGES -->
+[ci-shield]: https://img.shields.io/github/actions/workflow/status/SmartSeller-Agent/SmartSellerAgent/ci.yml?branch=develop&style=flat-square&label=CI
+[ci-url]: https://github.com/SmartSeller-Agent/SmartSellerAgent/actions/workflows/ci.yml
+[python-shield]: https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white
+[python-url]: pyproject.toml
+[docker-shield]: https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white
+[docker-url]: docker-compose.yml
+[smolagents-shield]: https://img.shields.io/badge/agents-smolagents-FF9D00?style=flat-square
+[smolagents-url]: https://github.com/huggingface/smolagents
+[contributing-shield]: https://img.shields.io/github/contributors/SmartSeller-Agent/SmartSellerAgent?style=flat-square
+[contributing-url]: docs/CONTRIBUTING.md
+[architecture-shield]: https://img.shields.io/badge/Architecture-darkgreen?style=flat-square
+[architecture-url]: docs/architecture.md
+[requirements-shield]: https://img.shields.io/badge/Requirements-darkgreen?style=flat-square
+[requirements-url]: docs/requirements-fulfilment.md
+[performance-shield]: https://img.shields.io/badge/Performance-darkgreen?style=flat-square
+[performance-url]: docs/performance.md
