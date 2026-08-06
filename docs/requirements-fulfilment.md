@@ -1,25 +1,18 @@
 # Requirements fulfilment
 
-> Covers submission requirement 3: *"a clear, structured list of all fulfilled
-> requirements (P1–P5 and selected W requirements) with brief evidence for each
-> requirement (reference to code, screenshot, log output or text)."*
->
-> **Scaffold.** The structure and the requirement texts are prepared. Fill in the
-> status and the evidence. At least **11 of the 14 W requirements** must be met.
->
-> Keep evidence short and checkable: a file reference with line number, a log
-> excerpt, or a screenshot in `docs/assets/`. One or two sentences each.
+<!-- Keep evidence short and checkable: a file reference with line number, a log excerpt, or a screenshot in `docs/figures/`. One or two sentences each --> 
 
 ## Mandatory requirements (P)
 
-| ID | Requirement | Status | Evidence |
-|----|---|---|---|
-| P1 | Genuine AI agent with tool usage | | |
-| P2 | TAO cycle visible, ≥3 steps | | |
-| P3 | Established agent framework | | |
-| P4 | README with description, architecture, installation, example | | |
-| P5 | Git repository with meaningful commit history | | |
+| ID | Requirement                                                  | Status           | Evidence |
+|----|--------------------------------------------------------------|:----------------:|---|
+| P1 | Genuine AI agent with tool usage                             |:warning:         | four real tools (web search, vision, margin calculation and publishing) NO SCREENSHOT/LOG |
+| P2 | TAO cycle visible, ≥3 steps                                  |:warning:         | build in but no screenshots/logs |
+| P3 | Established agent framework                                  |:warning:         | build in but no reason given |
+| P4 | README with description, architecture, installation, example |:white_check_mark:| see [README.md](../README.md) |
+| P5 | Git repository with meaningful commit history                |:white_check_mark:| see [activity on GitHub](https://github.com/SmartSeller-Agent/SmartSellerAgent/activity) or `git log --oneline` |
 
+### :warning: See P requirements below for missing evidence
 ### P1 — Genuine AI agent with tool usage
 > Evidence: log or screenshot of at least one tool call.
 
@@ -32,33 +25,30 @@
 ### P3 — Framework usage
 > Evidence: import statement plus a short explanation of *why* smolagents.
 
-### P4 — Documentation
-> Evidence: point at [../README.md](../README.md) and this docs folder.
+<!-- P4 — Documentation:  Evidence: point at [../README.md](../README.md) and this docs folder. -->
 
-### P5 — Commit history
-> Evidence: `git log --oneline` with at least 10 commits over the project period.
+<!-- P5 — Commit history: Evidence: `git log --oneline` with at least 10 commits over the project period. --> 
 
 ## Elective requirements (W)
 
-> At least 11 of 14. Mark clearly which ones you are **not** claiming — an
-> honest "not implemented" is better than a weak claim.
+<!-- At least 11 of 14. Mark clearly which ones we are **not** claiming an mark as not implemented. -->
 
-| ID | Requirement | Status | Evidence |
-|----|---|---|---|
-| W1 | Multi-agent setup (orchestrator + subagent) | | |
-| W2 | Multimodal input | | |
-| W3 | RAG component | | |
-| W4 | Agentic RAG | | |
-| W5 | Observability (tracing / structured logging) | | |
-| W6 | Prediction service via HTTP API | | |
-| W7 | Containerisation via `docker compose up` | | |
-| W8 | ≥5 meaningful automated tests | | |
-| W9 | Input validation & error handling | | |
-| W10 | CI/CD pipeline triggered by push | | |
-| W11 | Monitoring endpoint (`/health` or metrics) | | |
-| W12 | Data/concept drift reflection | | [reflection-w12-drift.md](reflection-w12-drift.md) |
-| W13 | Continuous learning concept | | [reflection-w13-continuous-learning.md](reflection-w13-continuous-learning.md) |
-| W14 | Responsible AI reflection | | [reflection-w14-responsible-ai.md](reflection-w14-responsible-ai.md) |
+| ID | Requirement                                  | Status           | Evidence |
+|----|----------------------------------------------|:----------------:|----------|
+| W1 | Multi-agent setup (orchestrator + subagent)  |:white_check_mark:| `orchestrator` (`managed_agents`), `vision_agent` and `publisher_agent` (see `src/app.py`) |
+| W2 | Multimodal input                             |:warning:         | no evidence |
+| W3 | RAG component                                |:x:               | not implemented |
+| W4 | Agentic RAG                                  |:x:               | not implemented |
+| W5 | Observability (tracing / structured logging) |:warning:         | no evidence |
+| W6 | Prediction service via HTTP API              |:white_check_mark:| `/run-task`, `/profile`, `/marketplace`, ... |
+| W7 | Containerisation via `docker compose up`     |:white_check_mark:| `docker compose up` is working with two configurations |
+| W8 | ≥5 meaningful automated tests                |:white_check_mark:| see all tests in `test/` |
+| W9 | Input validation & error handling            |:warning:         | no evidence |
+| W10 | CI/CD pipeline triggered by push            |:white_check_mark:| `.github/workflows/ci.yml` runs on push to `develop` and `main` |
+| W11 | Monitoring endpoint (`/health` or metrics)  |:white_check_mark:| `/health` is also container healthcheck (see also debug/info output) |
+| W12 | Data/concept drift reflection               |:warning:         | combine both reflections and fill with human written text [reflection-w12-drift.md](reflection-w12-drift.md) |
+| W13 | Continuous learning concept                 |:warning:         | combine both reflections and fill with human written text [reflection-w13-continuous-learning.md](reflection-w13-continuous-learning.md) |
+| W14 | Responsible AI reflection                   |:warning:         | combine both reflections and fill with human written text [reflection-w14-responsible-ai.md](reflection-w14-responsible-ai.md) |
 
 ### Notes per requirement
 
