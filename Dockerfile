@@ -94,10 +94,16 @@ COPY --chown=app:app test/ ./test/
 RUN mkdir -p /app/test/images/uploads /app/.state /app/screenshots \
     && chown -R app:app /app/test/images /app/.state /app/screenshots
 
-# chmod here rather than relying on the file's mode in git: the repository is
-# developed on Windows, where the executable bit does not survive.
+# Two things the host filesystem cannot be trusted with, both because this is
+# developed on Windows:
+#   - the executable bit does not survive, hence chmod
+#   - line endings may arrive as CRLF, and a "#!/bin/sh\r" shebang makes the
+#     kernel search for an interpreter called "/bin/sh\r". .gitattributes
+#     pins this to LF; stripping it here as well keeps the build working even
+#     when a checkout gets it wrong anyway.
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/entrypoint.sh
 
 USER app
 
