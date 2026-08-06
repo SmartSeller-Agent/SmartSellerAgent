@@ -1,8 +1,10 @@
 # -------------------------- Imports --------------------------
 from contextlib import asynccontextmanager
 from pathlib import Path
+import shutil
+import tempfile
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from typing import Optional
 
@@ -21,6 +23,9 @@ logging.getLogger("urllib3").setLevel(logging.DEBUG)
 # Imports: Tools
 from src.tools.vision import analyze_product_image
 from src.tools.pricing import calculate_margin
+from src.tools import marketplace
+from src.login_job import LoginJob
+from src import user_profile
 
 #-------------------------- Code --------------------------
 # setup tracing
@@ -73,11 +78,33 @@ vision_agent = ToolCallingAgent(
     ),
 )
 
+# --- Subagent: puts a finished listing on the marketplace ---
+# Eigener Agent und nicht nur ein Tool am Orchestrator, weil hier echte Arbeit
+# anfällt: aus Fließtext werden strukturierte Formularfelder mit eigenen Regeln
+# (Titellänge, Kategorie-Stichwort, Preisart). Die Anmeldung prüft er selbst,
+# bevor er etwas versucht.
+publisher_agent = ToolCallingAgent(
+    tools=[marketplace.publish_listing, marketplace.check_marketplace_session],
+    model=model,
+    instructions=_prompts["publisher_agent"]["instructions"],
+    # Knapp gehalten: der Ablauf ist prüfen, einstellen, berichten. Mehr Schritte
+    # hiessen, dass etwas schiefläuft — und jeder Schritt kostet eine Modellrunde.
+    max_steps=4,
+    verbosity_level=LogLevel.DEBUG,
+    name="publisher_agent",
+    description=(
+        "Stellt eine fertige Anzeige bei kleinanzeigen.de ein. "
+        "Erwartet Titel, Beschreibung, Preis, ein Stichwort für die Kategorie, "
+        "ob Versand möglich ist, und den Pfad des Produktbildes. "
+        "Prüft vorher selbst, ob eine gültige Anmeldung vorliegt."
+    ),
+)
+
 # --- Orchestrator: owns the end-to-end resale evaluation workflow ---
 orchestrator = ToolCallingAgent(
     tools=[webSearch, pricing_tool],
     model=model,
-    managed_agents=[vision_agent],
+    managed_agents=[vision_agent, publisher_agent],
     instructions=_prompts["orchestrator"]["instructions"],
     max_steps=10,
     # P2: see vision_agent above — DEBUG makes the Thought visible in the logs.
@@ -104,9 +131,13 @@ api = FastAPI(title="SmartSeller Agent API", lifespan=lifespan)
 
 # Erweitertes Request-Modell: Erlaubt optionale Übergabe von Bildpfad und Preis
 class TaskRequest(BaseModel):
-    task_name: str  
+    task_name: str
     image_path: Optional[str] = str(_image_path)
     purchase_price: Optional[float] = 20.0
+    # Freigabe für genau diesen Auftrag. Standard aus, und selbst ein True
+    # reicht allein nicht — die Installation muss es zusätzlich erlauben
+    # (KLEINANZEIGEN_ALLOW_PUBLISH). Das Sprachmodell sieht dieses Feld nicht.
+    allow_publish: bool = False
 
 @api.get("/health")
 def health_check():
@@ -135,11 +166,169 @@ def run_agent_task(request: TaskRequest):
         final_task = task_prompt_template 
 
     try:
-        # 3. Das Multi-Agent-System (orchestrator) mit dem fertigen Task starten
-        result = orchestrator.run(final_task)
-        return {"task": request.task_name, "result": result}
+        # 3. Das Multi-Agent-System (orchestrator) mit dem fertigen Task starten.
+        #    Die Freigabe gilt nur für die Dauer dieses Aufrufs: smolagents ruft
+        #    Tools synchron im selben Thread auf, deshalb sieht das
+        #    Veröffentlichungs-Tool den Wert — und nur dieser Auftrag.
+        with marketplace.publishing_allowed(request.allow_publish):
+            result = orchestrator.run(final_task)
+            # Innerhalb des Rahmens auslesen, danach ist das Protokoll wieder weg.
+            attempts = marketplace.publish_records()
+        return {
+            "task": request.task_name,
+            "result": result,
+            # Was das Tool wirklich getan hat — mitgeschrieben vom Tool selbst,
+            # nicht der Erzählung des Modells entnommen.
+            "publish_attempts": attempts,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------- Marktplatz-Anmeldung --------------------------
+# Die Anmeldung bei kleinanzeigen.de läuft bewusst von Hand ab: Captcha und
+# Zwei-Faktor-Abfrage kann kein Skript lösen. Der Container zeigt den Browser
+# dafür über noVNC an. Zugangsdaten nimmt die Anwendung nie entgegen.
+_login_job = LoginJob(marketplace.login_interactive)
+
+
+def _session_payload() -> dict:
+    status = marketplace.read_session_status()
+    verdict = marketplace.last_session_verdict()
+    return {
+        "exists": status.exists,
+        "usable": status.usable,
+        "description": status.describe(),
+        "saved_at": status.saved_at.isoformat() if status.saved_at else None,
+        # Ergebnis der letzten echten Prüfung. Ohne das bliebe die Oberfläche
+        # bei "sieht gut aus", obwohl der Anbieter die Sitzung eben abgelehnt hat.
+        "verdict": verdict.status,
+        "verdict_detail": verdict.detail,
+        "verdict_at": verdict.at.isoformat() if verdict.at else None,
+        # Damit die Oberfläche einen abgeschalteten Schalter erklären kann,
+        # statt ihn wirkungslos anzubieten.
+        "publishing_enabled": marketplace.publishing_enabled(),
+    }
+
+
+class ProfileRequest(BaseModel):
+    """Was der Anwender einmal angibt und danach ändern kann."""
+
+    zip_code: str
+
+
+@api.get("/profile")
+def get_profile():
+    """Einstellungen des Anwenders.
+
+    Liegt im selben Volume wie die Anmeldung, überlebt also einen Neustart
+    der Container. ``complete`` sagt der Oberfläche, ob sie beim ersten
+    Aufruf nach den Angaben fragen muss.
+    """
+    profile = user_profile.load_profile()
+    return {
+        "zip_code": profile.zip_code,
+        "complete": profile.complete,
+        "path": str(user_profile.profile_path()),
+    }
+
+
+@api.put("/profile")
+def put_profile(request: ProfileRequest):
+    try:
+        profile = user_profile.save_profile(
+            user_profile.Profile(zip_code=request.zip_code.strip())
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"zip_code": profile.zip_code, "complete": profile.complete}
+
+
+@api.get("/marketplace/session")
+def marketplace_session():
+    """Stand der gespeicherten Anmeldung — liest nur die Datei, startet nichts."""
+    return _session_payload()
+
+
+@api.delete("/marketplace/session")
+def marketplace_session_delete():
+    """Verwirft die gespeicherte Anmeldung.
+
+    Nur auf ausdrückliche Anweisung: eine fehlgeschlagene Prüfung allein ist
+    kein hinreichender Grund — sie sieht bei einer gesperrten Adresse genauso
+    aus wie bei einer wirklich ungültigen Sitzung.
+    """
+    marketplace.discard_session()
+    return _session_payload()
+
+
+@api.post("/marketplace/session/verify")
+def marketplace_session_verify():
+    """Ruft eine geschützte Seite auf und schaut, ob die Anmeldung noch trägt.
+
+    Im Unterschied zu GET /marketplace/session startet das einen Browser und
+    dauert einige Sekunden. Nur so lässt sich eine serverseitig verworfene
+    Sitzung erkennen — die Ablaufzeiten in der Datei sehen dann noch gültig aus.
+    """
+    status = marketplace.read_session_status()
+    if not status.usable:
+        raise HTTPException(status_code=409, detail=status.describe())
+
+    try:
+        messages = marketplace.verify_session_online()
+    except marketplace.SessionExpiredError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    return {"messages": messages, "session": _session_payload()}
+
+
+@api.post("/marketplace/login")
+def marketplace_login_start():
+    """Öffnet das Anmeldefenster im Browser des Containers.
+
+    Kehrt sofort zurück; der Vorgang wartet danach minutenlang auf den
+    Menschen vor dem noVNC-Fenster.
+    """
+    # Vorab prüfen statt den Lauf erst im Thread scheitern zu lassen: ohne
+    # sichtbaren Browser gibt es nichts zu bedienen, und der Aufrufer soll das
+    # sofort erfahren.
+    if marketplace.HEADLESS:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Kein sichtbarer Browser. Im Container KLEINANZEIGEN_VNC=true und "
+                "KLEINANZEIGEN_HEADLESS=false setzen (docker-compose tut das bereits)."
+            ),
+        )
+    return _login_job.start().as_dict()
+
+
+@api.get("/marketplace/login")
+def marketplace_login_status():
+    """Fortschritt des laufenden Anmeldevorgangs."""
+    return {**_login_job.snapshot().as_dict(), "session": _session_payload()}
+
+
+@api.post("/marketplace/session/import")
+def marketplace_session_import(file: UploadFile = File(...)):
+    """Rückfall: eine anderswo erzeugte Anmeldung übernehmen.
+
+    Gedacht für den Fall, dass die Anmeldung im Container am Anbieter
+    scheitert. Die Datei wird erst geprüft und dann übernommen — eine
+    unbrauchbare darf keine funktionierende Anmeldung verdrängen.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        staged = Path(tmp.name)
+
+    try:
+        marketplace.import_session(staged)
+    except (marketplace.SessionMissingError, marketplace.SessionExpiredError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        staged.unlink(missing_ok=True)
+
+    return _session_payload()
 
 
 def main():

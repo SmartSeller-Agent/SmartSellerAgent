@@ -47,7 +47,7 @@ Backend und Frontend sind zwei Prozesse und brauchen zwei Terminals:
 uv run uvicorn src.app:api --reload
 
 # Terminal 2 – UI auf http://localhost:8501
-uv run streamlit run frontend.py
+uv run streamlit run src/frontend.py
 ```
 
 > Achtung auf die Reihenfolge im Modulpfad: Das Modul heißt `src.app`, die

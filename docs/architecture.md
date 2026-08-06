@@ -18,7 +18,7 @@
 > Describe each part and what it is responsible for. A diagram helps; a text
 > description is explicitly allowed.
 >
-> - Frontend (Streamlit, `frontend.py`)
+> - Frontend (Streamlit, `src/frontend.py`)
 > - Backend (FastAPI, `src/app.py`) — endpoints `/health`, `/run-task`
 > - Orchestrator agent (smolagents `ToolCallingAgent`)
 > - Vision subagent

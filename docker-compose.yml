@@ -6,7 +6,7 @@
 #   ollama       — local LLM runtime serving the text and vision models
 #   ollama-init  — one-shot job that pulls the required models, then exits
 #   api          — FastAPI backend (src/app.py:api)   -> http://localhost:8000
-#   frontend     — Streamlit UI (frontend.py)         -> http://localhost:8501
+#   frontend     — Streamlit UI (src/frontend.py)     -> http://localhost:8501
 #
 # api and frontend run from the same image, they only differ in their command.
 #
@@ -86,6 +86,10 @@ services:
         condition: service_completed_successfully
     ports:
       - "8000:8000"
+      # noVNC — watch the browser the agent drives. Bound to 127.0.0.1 on
+      # purpose: the view is unauthenticated, and whoever reaches it controls a
+      # browser that is logged into the marketplace account.
+      - "127.0.0.1:6080:6080"
     environment:
       # Inside the compose network the runtime is reachable by service name,
       # so these deliberately override any localhost value coming from .env.
@@ -101,6 +105,26 @@ services:
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
       # Set to true to log every span export to stdout (noisy, debugging only)
       OTEL_DEBUG_EXPORT: ${OTEL_DEBUG_EXPORT:-}
+      # --- kleinanzeigen.de publishing ---------------------------------
+      # The saved login lives on the volume mounted below, not in the image.
+      KLEINANZEIGEN_STATE_DIR: /app/.state
+      # Brings up the virtual screen and the noVNC bridge (docker/entrypoint.sh).
+      KLEINANZEIGEN_VNC: "true"
+      DISPLAY: ":99"
+      # Visible rather than headless — that is the whole point of the screen
+      # above. The manual login needs it, and it makes the agent's work
+      # watchable. Set both of these the same way or the browser will not start.
+      KLEINANZEIGEN_HEADLESS: "false"
+      # Chromium's own sandbox needs privileges the unprivileged container user
+      # does not have; the container is the isolation boundary instead.
+      KLEINANZEIGEN_NO_SANDBOX: "true"
+      # SAFETY SWITCH, one of two: this allows publishing for the installation,
+      # the checkbox in the UI allows it for a single run. Both are needed, and
+      # neither is visible to the language model.
+      KLEINANZEIGEN_ALLOW_PUBLISH: ${KLEINANZEIGEN_ALLOW_PUBLISH:-}
+    # Chromium keeps its renderer memory in /dev/shm. Docker's 64 MB default is
+    # not enough and makes tabs crash on content-heavy pages.
+    shm_size: 1gb
     # Spans are exported in batches, so the container needs time on SIGTERM to
     # flush what is still queued. Docker's default of 10s can cut that short.
     stop_grace_period: 30s
@@ -108,6 +132,10 @@ services:
       # Shared with the frontend: it writes the uploaded image here and passes
       # the path to /run-task, so both containers must see the same directory.
       - uploads:/app/test/images/uploads
+      # The kleinanzeigen.de session — cookies that amount to a logged-in
+      # account. A volume so it survives `docker compose down` and never ends
+      # up in an image layer. Only api needs it: the browser runs there.
+      - marketplace-state:/app/.state
     # W11: the /health route doubles as the container healthcheck
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -132,13 +160,16 @@ services:
     environment:
       # 127.0.0.1 would be the frontend container itself — talk to the api service
       API_BASE_URL: http://api:8000
+      # This one is the other way round: the link is opened in the user's own
+      # browser, so it has to point at the published port on the host.
+      VNC_URL: ${VNC_URL:-http://localhost:6080/vnc.html?autoconnect=1&resize=scale}
       STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
     volumes:
       - uploads:/app/test/images/uploads
     command:
       - streamlit
       - run
-      - frontend.py
+      - src/frontend.py
       - --server.address=0.0.0.0
       - --server.port=8501
       # No browser to open inside a container, and skips the first-run e-mail prompt
@@ -148,3 +179,4 @@ services:
 volumes:
   ollama-models:
   uploads:
+  marketplace-state:

@@ -4,6 +4,13 @@
 .env.*
 !.env.example
 
+# Browser session of the logged-in marketplace account (cookies = a valid login).
+# Belongs in a runtime volume, never in an image layer.
+.state/
+*_session.json
+screenshots/
+tmp_browser_automation/
+
 # Local virtual environment (the image builds its own via uv)
 .venv/
 

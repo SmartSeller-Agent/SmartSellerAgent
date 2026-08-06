@@ -16,6 +16,10 @@ dependencies = [
     "duckduckgo-search>=8.1.1",
     "langfuse>=4.7.1",
     "openai>=2.41.0",
+    # Browser-Automatisierung für die Kleinanzeigen-Veröffentlichung.
+    # Das Paket allein genügt für die Tests; die Chromium-Binaries holt
+    # `playwright install chromium` (im Image ein eigener Build-Schritt).
+    "playwright>=1.58.0",
     "requests>=2.34.2",
     "smolagents[toolkit,telemetry]>=1.26.0",
     "opentelemetry-sdk>=1.20.0",
@@ -25,6 +29,10 @@ dependencies = [
     "fastapi>=0.136.3",
     "uvicorn>=0.49.0",
     "pydantic>=2.13.4",
+    # Wird von FastAPI für Datei-Uploads gebraucht (UploadFile). Kam bisher nur
+    # als Nebenabhängigkeit mit — hier wird sie direkt benutzt, also gehört sie
+    # ausdrücklich in die Liste.
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
