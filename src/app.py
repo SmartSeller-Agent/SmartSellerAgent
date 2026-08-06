@@ -143,6 +143,29 @@ class TaskRequest(BaseModel):
 def health_check():
     return {"status": "ok", "message": "Der SmartSeller Agent läuft!"}
 
+# Aufgaben, an deren Ende eine Anzeige stehen soll.
+PUBLISHING_TASKS = {"create_and_publish_listing"}
+
+
+def _publish_afterwards(listing_text: str, request: "TaskRequest") -> str:
+    """Holt den Veröffentlichungsschritt nach, wenn er ausgefallen ist.
+
+    Beobachtet: Der Orchestrator verfing sich in Websuchen, erreichte sein
+    Schrittlimit und lieferte eine erzwungene Schlussantwort — in der er
+    behauptete, die Anzeige sei eingestellt. Beauftragt hatte er niemanden.
+
+    Ein Schritt, der zwingend passieren soll, darf nicht davon abhängen, dass
+    ein Modell vorher mit seinem Budget haushaltet. Aufgerufen wird das nur bei
+    leerem Protokoll — es kann also nichts doppelt entstehen.
+    """
+    return publisher_agent.run(
+        "Stelle die folgende, bereits fertige Anzeige bei Kleinanzeigen ein. "
+        "Übernimm Titel, Beschreibung und Preis unverändert; deine Aufgabe ist "
+        "nur das Einstellen.\n"
+        f"Das Produktbild liegt unter '{request.image_path}'.\n\n{listing_text}"
+    )
+
+
 @api.post("/run-task")
 def run_agent_task(request: TaskRequest):
     # 1. Prompt dynamisch suchen (unterstützt deine neuen Tasks UND die vom Partner)
@@ -174,6 +197,10 @@ def run_agent_task(request: TaskRequest):
             result = orchestrator.run(final_task)
             # Innerhalb des Rahmens auslesen, danach ist das Protokoll wieder weg.
             attempts = marketplace.publish_records()
+
+            if request.task_name in PUBLISHING_TASKS and not attempts:
+                result = f"{result}\n\n{_publish_afterwards(result, request)}"
+                attempts = marketplace.publish_records()
         return {
             "task": request.task_name,
             "result": result,

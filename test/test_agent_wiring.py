@@ -56,6 +56,23 @@ def test_the_publishing_task_passes_the_image_path_through():
     assert "publisher_agent" in filled
 
 
+def test_the_search_step_is_capped():
+    """Ohne Deckel verfing sich der Orchestrator in Websuchen, erreichte sein
+    Schrittlimit und kam nie zum Veröffentlichen."""
+    instructions = app_module._prompts["orchestrator"]["instructions"]
+    task = app_module._prompts["orchestrator"]["tasks"]["create_and_publish_listing"]
+
+    assert "at most TWO web searches" in instructions
+    assert "ZWEI Suchen" in task
+
+
+def test_the_publishing_task_is_known_to_the_backend():
+    """Sonst holt die Anwendung einen ausgefallenen Schritt nie nach."""
+    assert app_module.PUBLISHING_TASKS <= set(
+        app_module._prompts["orchestrator"]["tasks"]
+    )
+
+
 def test_the_publisher_is_told_not_to_publish_twice():
     """Ein zweiter Aufruf erzeugte eine zweite Anzeige."""
     instructions = app_module._prompts["publisher_agent"]["instructions"]

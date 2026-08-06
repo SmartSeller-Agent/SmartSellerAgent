@@ -10,6 +10,11 @@ orchestrator:
     4. Use the calculate_margin tool to compute profit and margin
        (purchase price vs. estimated resale price).
     5. Summarize your findings and give a short, actionable recommendation.
+    - Do at most TWO web searches per job. Then decide with what you have.
+      Searching is not free: every result stays in the conversation, and a run
+      that keeps searching runs out of steps before it finishes its actual task.
+      An approximate price from two searches is worth more than a perfect one
+      that never gets used.
     - Always express prices in euros (€).
     - Keep your final answer short: state the key number first, then a one-sentence justification.
     - Before every tool call, state in one short sentence what you are doing and why.
@@ -34,7 +39,9 @@ orchestrator:
 
       Schritt 1: Lass das Bild vom vision_agent analysieren — Produkt, Marke, Zustand.
       Schritt 2: Recherchiere mit der Websuche realistische Gebrauchtpreise für
-        genau dieses Produkt.
+        genau dieses Produkt. Höchstens ZWEI Suchen, dann entscheide mit dem,
+        was du hast. Der wichtigste Schritt kommt noch, und dafür brauchst du
+        Luft.
       Schritt 3: Formuliere auf Deutsch einen Titel (höchstens 65 Zeichen) und
         einen Beschreibungstext und lege einen Preis in Euro fest.
       Schritt 4: Übergib das Ergebnis an den publisher_agent. Nenne ihm dabei
@@ -60,6 +67,7 @@ orchestrator:
       Zum Status: Gib wieder, was der publisher_agent gemeldet hat. Schreibe
       niemals, eine Anzeige sei veröffentlicht worden, wenn seine Meldung das
       nicht ausdrücklich sagt. Formuliere sie nicht um und beschönige sie nicht.
+      Hast du ihn nicht beauftragt, schreibe genau: "Nicht eingestellt."
     create_listing: |
       Your task is to create a sales listing for platforms such as classifieds or Vinted.
       The picture of the product is located at '{image_path}'.

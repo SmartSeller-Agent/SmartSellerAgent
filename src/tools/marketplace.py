@@ -899,12 +899,17 @@ def _context_options(use_session: bool) -> dict:
 
 
 @contextmanager
-def _browser_page(use_session: bool = True):
+def _browser_page(use_session: bool = True, keep_page_open: bool = False):
     """Browser, danach zuverlässig geschlossen.
 
     ``use_session=False`` startet mit einem leeren Profil — das ist der Fall
     für eine neue Anmeldung, bei der eine alte, ungültige Sitzung nur stören
     würde.
+
+    ``keep_page_open`` lässt den Tab stehen. Sinnvoll nur beim Browser auf dem
+    Host: Dort kann der Anwender das ausgefüllte Formular ansehen und selbst
+    absenden. Im Container wäre es wirkungslos, weil der Browser ohnehin
+    endet.
     """
     from playwright.sync_api import sync_playwright
 
@@ -933,10 +938,11 @@ def _browser_page(use_session: bool = True):
                 # Nur den eigenen Tab schließen. Kontext und Browser gehören
                 # dem Anwender; sie zu schließen würde ihm sein Fenster unter
                 # den Händen wegnehmen.
-                try:
-                    page.close()
-                except Exception:
-                    pass
+                if not keep_page_open:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
                 if not borrowed:
                     context.close()
         return
@@ -983,12 +989,26 @@ def publish_offer(listing: Listing, dry_run: bool = True) -> List[str]:
     if not session_lives_in_browser():
         require_session()
 
-    with _browser_page() as page:
+    # Beim Probelauf mit sichtbarem Browser bleibt das ausgefüllte Formular
+    # stehen. Der Screenshot ist ein schwacher Ersatz dafür, es selbst
+    # anzusehen — und wer es dann veröffentlichen will, drückt den Knopf der
+    # Website statt einen Schalter umzulegen.
+    keep_open = dry_run and session_lives_in_browser()
+
+    with _browser_page(keep_page_open=keep_open) as page:
         try:
-            return fill_offer_form(page, listing, dry_run=dry_run)
+            log = fill_offer_form(page, listing, dry_run=dry_run)
         except Exception:
             _screenshot(page, "99_error.png")
             raise
+
+    if keep_open:
+        log.append(
+            "Das ausgefüllte Formular bleibt im Browser stehen. Dort kannst du "
+            "es prüfen, ändern und selbst veröffentlichen — oder den Tab "
+            "einfach schließen."
+        )
+    return log
 
 
 # Wie oft nachgesehen wird, ob die Anmeldung inzwischen durch ist.

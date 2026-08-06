@@ -189,6 +189,81 @@ def test_the_response_says_what_the_tool_did_not_what_the_agent_claims(
     assert [a["outcome"] for a in body["publish_attempts"]] == ["preview"]
 
 
+def test_a_forgotten_publishing_step_is_made_up_for(client, monkeypatch):
+    """Der beobachtete Fall: Der Orchestrator verfing sich in Websuchen,
+    erreichte sein Schrittlimit und behauptete in der erzwungenen
+    Schlussantwort, die Anzeige sei eingestellt — beauftragt hatte er
+    niemanden."""
+    monkeypatch.setattr(marketplace, "publish_offer", lambda listing_arg, dry_run: ["ok"])
+
+    class ForgetfulOrchestrator:
+        def run(self, task):
+            return "## Titel\nRegal\n\n## Status\nDie Anzeige wurde eingestellt."
+
+    beauftragt = {}
+
+    class Publisher:
+        def run(self, task):
+            beauftragt["task"] = task
+            marketplace.publish_listing(
+                title="Regal", description="gut erhalten", price=20
+            )
+            return "PROBELAUF — die Anzeige wurde NICHT veröffentlicht."
+
+    monkeypatch.setattr(app_module, "orchestrator", ForgetfulOrchestrator())
+    monkeypatch.setattr(app_module, "publisher_agent", Publisher())
+
+    body = client.post(
+        "/run-task",
+        json={"task_name": "create_and_publish_listing", "image_path": "/app/bild.jpg"},
+    ).json()
+
+    assert [a["outcome"] for a in body["publish_attempts"]] == ["preview"]
+    assert "/app/bild.jpg" in beauftragt["task"]
+    # Die Rückmeldung des Nachholers gehört in die Antwort, sonst widerspricht
+    # der Text weiterhin dem, was passiert ist.
+    assert "PROBELAUF" in body["result"]
+
+
+def test_a_publishing_step_that_happened_is_not_repeated(client, monkeypatch):
+    """Sonst entstünde eine zweite Anzeige — die lässt sich nicht zurücknehmen."""
+    monkeypatch.setattr(marketplace, "publish_offer", lambda listing_arg, dry_run: ["ok"])
+
+    class ThoroughOrchestrator:
+        def run(self, task):
+            marketplace.publish_listing(
+                title="Regal", description="gut erhalten", price=20
+            )
+            return "fertig"
+
+    monkeypatch.setattr(app_module, "orchestrator", ThoroughOrchestrator())
+    monkeypatch.setattr(
+        app_module,
+        "publisher_agent",
+        type("Nie", (), {"run": lambda self, task: pytest.fail("darf nicht laufen")})(),
+    )
+
+    body = client.post(
+        "/run-task", json={"task_name": "create_and_publish_listing"}
+    ).json()
+
+    assert len(body["publish_attempts"]) == 1
+
+
+def test_other_tasks_are_left_alone(client, monkeypatch):
+    """margin_check soll nichts einstellen — auch nicht nachträglich."""
+    monkeypatch.setattr(app_module, "orchestrator", _RecordingOrchestrator())
+    monkeypatch.setattr(
+        app_module,
+        "publisher_agent",
+        type("Nie", (), {"run": lambda self, task: pytest.fail("darf nicht laufen")})(),
+    )
+
+    body = client.post("/run-task", json={"task_name": "margin_check"}).json()
+
+    assert body["publish_attempts"] == []
+
+
 def test_the_permission_is_gone_once_the_request_is_over(client, monkeypatch):
     monkeypatch.setenv("KLEINANZEIGEN_ALLOW_PUBLISH", "true")
     monkeypatch.setattr(app_module, "orchestrator", _RecordingOrchestrator())

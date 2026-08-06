@@ -752,7 +752,9 @@ def test_publishing_needs_no_session_file_when_the_browser_has_one(
     das Konto offen steht."""
     monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
     monkeypatch.setattr(
-        marketplace, "_browser_page", lambda use_session=True: _null_context()
+        marketplace,
+        "_browser_page",
+        lambda use_session=True, keep_page_open=False: _null_context(),
     )
     reached = {}
 
@@ -776,6 +778,57 @@ def test_publishing_still_demands_a_file_for_the_container_browser(
 
     with pytest.raises(SessionMissingError):
         marketplace.publish_offer(listing, dry_run=True)
+
+
+@pytest.fixture
+def watch_browser_page(monkeypatch):
+    """Fängt ab, wie der Browser angefordert wird."""
+    seen = {}
+
+    @contextmanager
+    def fake(use_session=True, keep_page_open=False):
+        seen["keep_page_open"] = keep_page_open
+        yield FakePage()
+
+    monkeypatch.setattr(marketplace, "_browser_page", fake)
+    monkeypatch.setattr(
+        marketplace, "fill_offer_form", lambda page, listing, dry_run: ["ausgefüllt"]
+    )
+    return seen
+
+
+def test_the_preview_stays_open_in_the_host_browser(
+    monkeypatch, listing, watch_browser_page
+):
+    """Ein Screenshot ist ein schwacher Ersatz dafür, das Formular anzusehen."""
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+
+    log = marketplace.publish_offer(listing, dry_run=True)
+
+    assert watch_browser_page["keep_page_open"] is True
+    assert any("bleibt im Browser stehen" in line for line in log)
+
+
+def test_a_real_publication_leaves_no_tab_behind(
+    monkeypatch, listing, watch_browser_page
+):
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+
+    marketplace.publish_offer(listing, dry_run=False)
+
+    assert watch_browser_page["keep_page_open"] is False
+
+
+def test_the_container_browser_closes_its_tab(
+    monkeypatch, listing, session_file, watch_browser_page
+):
+    """Dort wäre ein offener Tab wirkungslos — der Browser endet ohnehin."""
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "")
+    _write_session(session_file, [{"name": "auth", "expires": time.time() + 3600}])
+
+    marketplace.publish_offer(listing, dry_run=True)
+
+    assert watch_browser_page["keep_page_open"] is False
 
 
 def test_no_host_browser_configured_means_the_question_does_not_arise(monkeypatch):
@@ -1156,7 +1209,7 @@ def use_fake_browser(monkeypatch):
 
     def install(page):
         @contextmanager
-        def fake_browser_page(use_session=True):
+        def fake_browser_page(use_session=True, keep_page_open=False):
             calls.append(use_session)
             yield page
 
