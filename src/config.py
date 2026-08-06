@@ -9,6 +9,7 @@
 #   OpenRouter : https://openrouter.ai/api/v1
 import json
 import os
+import shlex
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -97,6 +98,24 @@ KLEINANZEIGEN_LOGIN_TIMEOUT_S = int(os.getenv("KLEINANZEIGEN_LOGIN_TIMEOUT_S", "
 # Ein frisch aufgesetzter Container hat weder Sprache noch Zeitzone. Ein
 # Browser, der sich als englischsprachig mit UTC meldet, während er von einer
 # deutschen Adresse aus eine deutsche Seite aufruft, fällt auf.
+# Adresse eines bereits laufenden Browsers, an den sich die Anwendung hängt,
+# statt selbst einen zu starten (Chrome DevTools Protocol).
+#
+# Gedacht für den Betrieb im Container: Ein Browser auf dem Host bringt dessen
+# Umgebung mit — echte Grafikausgabe, vollständigen Schriftartenbestand,
+# gewohntes Betriebssystem — und wird von Websites damit behandelt wie jeder
+# andere Browser dieses Rechners. Der virtuelle Bildschirm im Container wird
+# dann nicht gebraucht, und das Fenster erscheint direkt auf dem Desktop.
+#
+# Leer lassen für den bisherigen Weg: eigener Browser im Container.
+#   Beispiel: http://host.docker.internal:9222
+KLEINANZEIGEN_BROWSER_CDP = os.getenv("KLEINANZEIGEN_BROWSER_CDP", "").strip()
+
+# Zusätzliche Startparameter für den Browser, wie auf einer Kommandozeile
+# geschrieben. Eine Luke für Versuche, die sonst eine Codeänderung bräuchten —
+# etwa um über --host-resolver-rules eine bestimmte Adressfamilie zu erzwingen.
+KLEINANZEIGEN_BROWSER_ARGS = shlex.split(os.getenv("KLEINANZEIGEN_BROWSER_ARGS", ""))
+
 KLEINANZEIGEN_LOCALE = os.getenv("KLEINANZEIGEN_LOCALE", "de-DE")
 KLEINANZEIGEN_TIMEZONE = os.getenv("KLEINANZEIGEN_TIMEZONE", "Europe/Berlin")
 

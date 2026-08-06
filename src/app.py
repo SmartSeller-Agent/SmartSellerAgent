@@ -208,6 +208,17 @@ def _session_payload() -> dict:
         # Damit die Oberfläche einen abgeschalteten Schalter erklären kann,
         # statt ihn wirkungslos anzubieten.
         "publishing_enabled": marketplace.publishing_enabled(),
+        # Wo der Browser läuft. Davon hängt ab, wohin die Oberfläche den
+        # Anwender schickt: auf seinen eigenen Bildschirm oder in die
+        # noVNC-Ansicht des Containers.
+        "browser_on_host": bool(marketplace.BROWSER_CDP),
+        # Läuft dieser Browser gerade? Der Container kann ihn nicht starten —
+        # ein Programm auf dem Rechner des Anwenders zu starten ist genau das,
+        # was ein Container nicht darf. Also muss die Oberfläche darum bitten.
+        "browser_reachable": marketplace.browser_reachable(),
+        # Wo die Anmeldung liegt: im Profil des Browsers oder in unserer Datei.
+        # Davon hängt ab, was die Oberfläche überhaupt sinnvoll anzeigen kann.
+        "session_in_browser": marketplace.session_lives_in_browser(),
     }
 
 
@@ -271,7 +282,8 @@ def marketplace_session_verify():
     Sitzung erkennen — die Ablaufzeiten in der Datei sehen dann noch gültig aus.
     """
     status = marketplace.read_session_status()
-    if not status.usable:
+    # Trägt der Browser die Anmeldung selbst, sagt die Datei nichts aus.
+    if not status.usable and not marketplace.session_lives_in_browser():
         raise HTTPException(status_code=409, detail=status.describe())
 
     try:

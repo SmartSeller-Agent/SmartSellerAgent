@@ -70,11 +70,34 @@ The site has no API, so the agent drives a real browser through the offer form.
 Two things follow from that, and both are visible in the UI:
 
 **You log in yourself.** The site puts a security check and two-factor prompt in
-front of the login, which no script can solve. The container therefore runs a
-browser on a virtual screen and streams it to `localhost:6080`, where you sign in
-once by hand. No password is ever asked for or stored — only the resulting
-session, in a volume that survives `docker compose down`. The same view lets you
-watch the agent fill in the form later.
+front of the login, which no script can solve. No password is ever asked for or
+stored — you sign in by hand once, and only the resulting session is kept. There
+are two ways to get a browser you can do that in:
+
+*A browser on your machine (recommended).* Start it once in its own terminal and
+leave it open; the container drives it and the window appears on your desktop:
+
+```bash
+uv run python -m scripts.host_browser
+```
+
+```bash
+# in .env
+KLEINANZEIGEN_BROWSER_CDP=http://host.docker.internal:9222
+KLEINANZEIGEN_VNC=false
+```
+
+The login then lives in that browser's own profile, which persists. This is the
+reliable path: the marketplace treats the container's browser as a different
+device and has refused sessions there that work everywhere else.
+
+*A browser inside the container.* Without the two lines above, the container runs
+its own browser on a virtual screen and streams it to `localhost:6080`. No extra
+terminal, but subject to the device problem described above.
+
+Either way, the sidebar walks you through it: it says whether a browser is
+running, offers a check, and only offers to log in when the check says you are
+not.
 
 **Nothing goes live by accident.** A published ad cannot be taken back, so it
 takes two switches: `KLEINANZEIGEN_ALLOW_PUBLISH=true` in `.env` (the operator

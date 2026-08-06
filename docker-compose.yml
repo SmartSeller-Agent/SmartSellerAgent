@@ -108,13 +108,17 @@ services:
       # --- kleinanzeigen.de publishing ---------------------------------
       # The saved login lives on the volume mounted below, not in the image.
       KLEINANZEIGEN_STATE_DIR: /app/.state
+      # Drive a browser on the host instead of one in the container — see
+      # scripts/host_browser.py. Empty means the container starts its own.
+      KLEINANZEIGEN_BROWSER_CDP: ${KLEINANZEIGEN_BROWSER_CDP:-}
       # Brings up the virtual screen and the noVNC bridge (docker/entrypoint.sh).
-      KLEINANZEIGEN_VNC: "true"
+      # Not needed with a host browser: set KLEINANZEIGEN_VNC=false in .env.
+      KLEINANZEIGEN_VNC: ${KLEINANZEIGEN_VNC:-true}
       DISPLAY: ":99"
       # Visible rather than headless — that is the whole point of the screen
       # above. The manual login needs it, and it makes the agent's work
       # watchable. Set both of these the same way or the browser will not start.
-      KLEINANZEIGEN_HEADLESS: "false"
+      KLEINANZEIGEN_HEADLESS: ${KLEINANZEIGEN_HEADLESS:-false}
       # Chromium's own sandbox needs privileges the unprivileged container user
       # does not have; the container is the isolation boundary instead.
       KLEINANZEIGEN_NO_SANDBOX: "true"

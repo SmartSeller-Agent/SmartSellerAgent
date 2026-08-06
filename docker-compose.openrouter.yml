@@ -53,9 +53,17 @@ services:
       # --- kleinanzeigen.de publishing ---------------------------------
       # Same settings as in docker-compose.yml; see there for the reasoning.
       KLEINANZEIGEN_STATE_DIR: /app/.state
-      KLEINANZEIGEN_VNC: "true"
+      # Set KLEINANZEIGEN_BROWSER_CDP in .env to drive a browser running on the
+      # host instead of one inside the container — see scripts/host_browser.py.
+      # The container's own browser is treated as a different device by the
+      # marketplace, which makes it reject sessions that work everywhere else.
+      KLEINANZEIGEN_BROWSER_CDP: ${KLEINANZEIGEN_BROWSER_CDP:-}
+      # The virtual screen is only needed for the container's own browser. With
+      # a host browser there is nothing to show, so set KLEINANZEIGEN_VNC=false
+      # in .env and save the whole X stack.
+      KLEINANZEIGEN_VNC: ${KLEINANZEIGEN_VNC:-true}
       DISPLAY: ":99"
-      KLEINANZEIGEN_HEADLESS: "false"
+      KLEINANZEIGEN_HEADLESS: ${KLEINANZEIGEN_HEADLESS:-false}
       KLEINANZEIGEN_NO_SANDBOX: "true"
       # SAFETY SWITCH, one of two — see docker-compose.yml. Both this and the
       # checkbox in the UI are needed before anything goes live.

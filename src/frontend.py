@@ -6,6 +6,7 @@ src/, damit die Oberfläche nichts von Agenten, Modellen oder Browsern wissen
 muss. Sie läuft im Docker-Aufbau in einem eigenen Container.
 """
 import os
+import time
 from pathlib import Path
 
 import requests
@@ -107,21 +108,65 @@ def render_profile_settings(sidebar, profile: dict) -> None:
 # Seitenleiste: Anmeldung beim Marktplatz
 # --------------------------------------------------------------------------
 def render_login_progress(sidebar) -> None:
-    """Zeigt den Stand eines laufenden Anmeldevorgangs."""
+    """Zeigt den Stand eines laufenden oder beendeten Anmeldevorgangs.
+
+    Wird weit oben gezeichnet: Ein Fehlschlag im Hintergrund ist sonst nicht
+    von einem Erfolg zu unterscheiden — beides sähe aus wie "nichts passiert".
+    """
     ok, data = _call("GET", LOGIN_URL, timeout=QUICK_TIMEOUT_S)
     if not ok or data.get("status") == "idle":
         return
 
     status = data["status"]
+    if status == "done":
+        # Nichts anzeigen: Das Ergebnis steht bereits in der Statuszeile
+        # darüber. Ein zweiter Erfolgshinweis samt Dateipfad wäre nur Lärm,
+        # der nach jedem Neuzeichnen wieder auftaucht.
+        return
+
     if status == "running":
         sidebar.info("Anmeldung läuft — bitte im Browserfenster fortfahren.")
     elif status == "failed":
         sidebar.error(f"Anmeldung fehlgeschlagen: {data.get('error')}")
-    elif status == "done":
-        sidebar.success("Anmeldung abgeschlossen.")
 
     for message in data.get("messages", []):
         sidebar.caption(message)
+
+
+def _verify_and_rerun() -> None:
+    with st.spinner("Ruft eine geschützte Seite auf …"):
+        _call("POST", VERIFY_URL, timeout=VERIFY_TIMEOUT_S)
+    # Neu zeichnen, damit die Kopfzeile das Ergebnis zeigt und nicht mehr den
+    # Stand von vor der Prüfung.
+    st.rerun()
+
+
+def _render_start_browser(container) -> None:
+    """Der Container kann kein Programm auf dem Rechner des Anwenders starten.
+
+    Das ist keine Einstellung, sondern die Grenze, die einen Container
+    ausmacht. Also sagen wir, was zu tun ist.
+    """
+    container.warning("Der Browser auf deinem Rechner läuft nicht.")
+    container.code("uv run python -m scripts.host_browser")
+    container.caption("In einem eigenen Terminal starten und offen lassen.")
+    if container.button("Erneut nach dem Browser suchen", use_container_width=True):
+        st.rerun()
+
+
+def _render_login_button(container, session: dict, label: str = "Jetzt anmelden") -> None:
+    if not container.button(label, use_container_width=True):
+        return
+
+    started, result = _call("POST", LOGIN_URL, timeout=QUICK_TIMEOUT_S)
+    if not started:
+        container.error(result)
+        return
+
+    # Kurz warten und neu zeichnen, statt den Start zu melden und zu hoffen.
+    # Scheitert der Vorgang sofort, steht der Grund dann gleich oben.
+    time.sleep(2)
+    st.rerun()
 
 
 def render_session_sidebar():
@@ -138,7 +183,19 @@ def render_session_sidebar():
     # dass Cookies noch nicht abgelaufen sind — das hat schon einmal "in
     # Ordnung" gemeldet, während der Anbieter die Sitzung längst abgelehnt hatte.
     verdict = session.get("verdict", "unknown")
-    if not session["usable"]:
+    # Trägt der Browser die Anmeldung in seinem Profil, sagt unsere Datei
+    # nichts über den Anmeldezustand aus — dann wäre "keine gültige Anmeldung"
+    # schlicht falsch, während im Fenster daneben das Konto offen ist.
+    in_browser = bool(session.get("session_in_browser"))
+
+    if in_browser and not session["usable"]:
+        if verdict == "accepted":
+            sidebar.success("Angemeldet und geprüft")
+        elif verdict == "rejected":
+            sidebar.error("Anmeldung wird nicht mehr akzeptiert — bitte neu anmelden")
+        else:
+            sidebar.info("Anmeldung liegt im Browser — Zustand ungeprüft")
+    elif not session["usable"]:
         sidebar.warning("Keine gültige Anmeldung")
     elif verdict == "accepted":
         sidebar.success("Angemeldet und geprüft")
@@ -147,65 +204,78 @@ def render_session_sidebar():
     else:
         sidebar.info("Anmeldung vorhanden, aber ungeprüft")
 
+    # Ganz oben, weil hier der Grund steht, wenn eine Anmeldung eben
+    # fehlgeschlagen ist. Weiter unten würde man ihn übersehen.
+    render_login_progress(sidebar)
+
     if session.get("verdict_detail"):
         sidebar.caption(session["verdict_detail"])
 
     # Die Cookie-Bilanz nur zeigen, solange sie etwas Nützliches aussagt. Nach
     # einer Absage würde "7 Cookies gültig" der roten Meldung direkt darüber
-    # widersprechen.
-    if verdict != "rejected":
-        sidebar.caption(session["description"])
+    # widersprechen — und beim Browser mit eigenem Profil sagt die Datei
+    # ohnehin nichts über den Anmeldezustand.
+    if in_browser:
+        sidebar.caption(
+            "Die Anmeldung steckt im Profil des Browsers auf deinem Rechner "
+            "und bleibt dort erhalten. Das Fenster erscheint auf deinem "
+            "Desktop; Sicherheitsabfrage und Zwei-Faktor-Bestätigung erledigst "
+            "du dort selbst."
+        )
+    else:
+        if verdict != "rejected":
+            sidebar.caption(session["description"])
+        sidebar.caption(
+            f"Der Browser der Anwendung ist unter [dieser Ansicht]({VNC_URL}) zu "
+            "sehen — dort ist nur etwas zu sehen, solange gerade ein Browser "
+            "geöffnet ist."
+        )
 
-    if sidebar.button("Anmeldung prüfen", use_container_width=True):
-        with st.spinner("Ruft eine geschützte Seite auf …"):
-            _call("POST", VERIFY_URL, timeout=VERIFY_TIMEOUT_S)
-        # Neu zeichnen, damit die Kopfzeile das Ergebnis zeigt und nicht mehr
-        # den Stand von vor der Prüfung.
-        st.rerun()
-
-    # Nur anbieten, wenn die Anmeldung ohnehin nichts mehr taugt. Eine
-    # funktionierende soll man nicht mit einem Fehlklick verlieren.
-    if session["exists"] and (verdict == "rejected" or not session["usable"]):
-        if sidebar.button("Anmeldung verwerfen", use_container_width=True):
-            ok, result = _call("DELETE", SESSION_URL, timeout=QUICK_TIMEOUT_S)
-            if not ok:
-                sidebar.error(result)
-            else:
-                st.rerun()
-
-    sidebar.markdown(
-        "Die Anmeldung läuft von Hand ab: Sicherheitsabfrage und "
-        "Zwei-Faktor-Bestätigung kann kein Programm erledigen. "
-        f"Der Browser der Anwendung ist unter [dieser Ansicht]({VNC_URL}) zu sehen — "
-        "dort ist nur etwas zu sehen, solange die Anwendung gerade einen "
-        "Browser geöffnet hat."
+    # An jeder Stelle gibt es genau einen sinnvollen nächsten Schritt. Zwei
+    # gleichrangige Knöpfe zu zeigen, zwingt den Anwender zu einer Entscheidung,
+    # für die er den Unterschied zwischen "prüfen" und "anmelden" kennen müsste.
+    browser_missing = bool(
+        session.get("browser_on_host") and not session.get("browser_reachable")
     )
+    # Wir wissen, dass die Anmeldung fehlt — nicht bloß, dass sie ungeprüft ist.
+    login_known_bad = verdict == "rejected" or (not in_browser and not session["usable"])
 
-    if sidebar.button("Anmeldefenster öffnen", use_container_width=True):
-        started, result = _call("POST", LOGIN_URL, timeout=QUICK_TIMEOUT_S)
-        if started:
-            sidebar.info(
-                "Fenster geöffnet — es startet bewusst ohne die gespeicherte "
-                "Anmeldung, damit eine alte Sitzung nicht stört. Jetzt in der "
-                "verlinkten Ansicht anmelden und danach hier aktualisieren."
-            )
-        else:
-            sidebar.error(result)
+    if browser_missing:
+        _render_start_browser(sidebar)
+    elif login_known_bad:
+        _render_login_button(sidebar, session)
+        if sidebar.button("Trotzdem erneut prüfen", use_container_width=True):
+            _verify_and_rerun()
+    else:
+        label = "Anmeldung erneut prüfen" if verdict == "accepted" else "Anmeldung prüfen"
+        if sidebar.button(label, use_container_width=True):
+            _verify_and_rerun()
 
-    if sidebar.button("Stand aktualisieren", use_container_width=True):
-        st.rerun()
+    with sidebar.expander("Weitere Möglichkeiten"):
+        if not browser_missing and not login_known_bad:
+            st.caption("Um das Konto zu wechseln oder eine Anmeldung zu erneuern:")
+            _render_login_button(st, session, label="Anmeldefenster öffnen")
 
-    render_login_progress(sidebar)
+        # Verwerfen nur, wenn die Anmeldung ohnehin nichts mehr taugt — eine
+        # funktionierende soll man nicht mit einem Fehlklick verlieren.
+        if session["exists"] and (verdict == "rejected" or not session["usable"]):
+            if st.button("Gespeicherte Anmeldung verwerfen", use_container_width=True):
+                ok, result = _call("DELETE", SESSION_URL, timeout=QUICK_TIMEOUT_S)
+                if not ok:
+                    st.error(result)
+                else:
+                    st.rerun()
 
-    # Rückfall, falls die Anmeldung im Container nicht durchgeht — etwa weil
-    # der Anbieter den Adressbereich vorübergehend sperrt.
-    with sidebar.expander("Anmeldung aus Datei übernehmen"):
         st.caption(
             "Auf einem anderen Rechner erzeugte Anmeldung hochladen. "
             "Die Datei wird geprüft, bevor sie die vorhandene ersetzt."
         )
+        # Der Schlüssel wechselt nach jedem Import. Ohne das behält Streamlit
+        # die einmal gewählte Datei bei — und ein zweiter Klick schickte
+        # wieder die alte los, obwohl inzwischen eine neuere existiert.
+        round_number = st.session_state.get("session_upload_round", 0)
         upload = st.file_uploader(
-            "Sitzungsdatei (JSON)", type=["json"], key="session_upload"
+            "Sitzungsdatei (JSON)", type=["json"], key=f"session_upload_{round_number}"
         )
         if upload is not None and st.button("Übernehmen"):
             ok, result = _call(
@@ -214,10 +284,14 @@ def render_session_sidebar():
                 files={"file": (upload.name, upload.getvalue(), "application/json")},
                 timeout=QUICK_TIMEOUT_S,
             )
-            if ok:
-                st.success(result["description"])
-            else:
+            if not ok:
                 st.error(result)
+            else:
+                st.session_state["session_upload_round"] = round_number + 1
+                # Neu zeichnen, damit die Kopfzeile den übernommenen Stand
+                # zeigt. Sonst bleibt die alte Auskunft stehen und man hält
+                # eine tote Anmeldung für die gerade hochgeladene.
+                st.rerun()
 
     return session
 

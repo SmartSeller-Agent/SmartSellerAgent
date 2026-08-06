@@ -25,6 +25,12 @@ from src import user_profile
 from src.tools import marketplace
 from src.tools.marketplace import Listing, SessionExpiredError, SessionMissingError
 
+@contextmanager
+def _null_context():
+    """Ersetzt _browser_page dort, wo die Seite selbst keine Rolle spielt."""
+    yield FakePage()
+
+
 DEFAULT_CATEGORIES = [
     ("91", "Haus & Garten → Badezimmer"),
     ("88", "Haus & Garten → Wohnzimmer → Schränke & Schrankwände"),
@@ -707,6 +713,121 @@ def test_without_a_profile_the_sites_own_prefill_is_left_alone(listing):
 
     assert 'input[id="ad-zip-code"]' not in page.filled
     assert any("Vorbelegung aus dem Konto" in line for line in log)
+
+
+# --------------------------------------------------------------------------
+# Browser auf dem Host statt im Container
+# --------------------------------------------------------------------------
+def test_a_hostname_is_resolved_before_connecting(monkeypatch):
+    """Chromium quittiert DevTools-Anfragen mit einem Namen im Host-Header
+    mit HTTP 500 — erlaubt sind nur localhost und IP-Adressen."""
+    monkeypatch.setattr(marketplace.socket, "gethostbyname", lambda host: "192.168.65.254")
+
+    assert (
+        marketplace._cdp_endpoint("http://host.docker.internal:9222")
+        == "http://192.168.65.254:9222"
+    )
+
+
+def test_localhost_is_left_alone():
+    assert marketplace._cdp_endpoint("http://localhost:9222") == "http://localhost:9222"
+
+
+def test_an_address_that_is_already_numeric_survives_unchanged(monkeypatch):
+    monkeypatch.setattr(marketplace.socket, "gethostbyname", lambda host: host)
+
+    assert marketplace._cdp_endpoint("http://127.0.0.1:9222") == "http://127.0.0.1:9222"
+
+
+def test_a_host_browser_carries_the_login_itself(monkeypatch):
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+
+    assert marketplace.session_lives_in_browser() is True
+
+
+def test_publishing_needs_no_session_file_when_the_browser_has_one(
+    monkeypatch, session_file, listing
+):
+    """Sonst verweigert die Anwendung die Arbeit, während im Fenster daneben
+    das Konto offen steht."""
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+    monkeypatch.setattr(
+        marketplace, "_browser_page", lambda use_session=True: _null_context()
+    )
+    reached = {}
+
+    def fake_fill(page, listing_arg, dry_run):
+        reached["yes"] = True
+        return ["ok"]
+
+    monkeypatch.setattr(marketplace, "fill_offer_form", fake_fill)
+
+    # Keine Datei vorhanden — und trotzdem kein Abbruch.
+    assert not session_file.exists()
+    marketplace.publish_offer(listing, dry_run=True)
+
+    assert reached == {"yes": True}
+
+
+def test_publishing_still_demands_a_file_for_the_container_browser(
+    monkeypatch, session_file, listing
+):
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "")
+
+    with pytest.raises(SessionMissingError):
+        marketplace.publish_offer(listing, dry_run=True)
+
+
+def test_no_host_browser_configured_means_the_question_does_not_arise(monkeypatch):
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "")
+
+    assert marketplace.browser_reachable() is None
+
+
+def test_a_running_host_browser_is_reported_as_reachable(monkeypatch):
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+    monkeypatch.setattr(marketplace.socket, "gethostbyname", lambda host: "192.168.65.254")
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(
+        marketplace.socket, "create_connection", lambda address, timeout: FakeConnection()
+    )
+
+    assert marketplace.browser_reachable() is True
+
+
+def test_a_stopped_host_browser_is_reported_instead_of_crashing(monkeypatch):
+    """Die Oberfläche soll sagen können, was zu tun ist.
+
+    Der Container kann den Browser nicht selbst starten — ein Programm auf dem
+    Rechner des Anwenders zu starten ist genau das, was ein Container nicht
+    darf.
+    """
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+    monkeypatch.setattr(marketplace.socket, "gethostbyname", lambda host: "192.168.65.254")
+
+    def refused(address, timeout):
+        raise ConnectionRefusedError(111, "Connection refused")
+
+    monkeypatch.setattr(marketplace.socket, "create_connection", refused)
+
+    assert marketplace.browser_reachable() is False
+
+
+def test_an_unresolvable_name_is_passed_on_untouched(monkeypatch):
+    """Dann soll die Fehlermeldung von Playwright kommen, nicht von uns."""
+    def fails(host):
+        raise OSError("Name or service not known")
+
+    monkeypatch.setattr(marketplace.socket, "gethostbyname", fails)
+
+    assert marketplace._cdp_endpoint("http://nirgends:9222") == "http://nirgends:9222"
 
 
 # --------------------------------------------------------------------------

@@ -39,16 +39,20 @@ import contextvars
 import json
 import os
 import re
+import socket
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlparse, urlunparse
 
 from smolagents import tool
 
 from src.config import (
+    KLEINANZEIGEN_BROWSER_ARGS,
+    KLEINANZEIGEN_BROWSER_CDP,
     KLEINANZEIGEN_CONFIRM_TIMEOUT_MS,
     KLEINANZEIGEN_FIELD_TIMEOUT_MS,
     KLEINANZEIGEN_HEADLESS,
@@ -76,6 +80,8 @@ NO_SANDBOX = KLEINANZEIGEN_NO_SANDBOX
 LOGIN_TIMEOUT_S = KLEINANZEIGEN_LOGIN_TIMEOUT_S
 LOCALE = KLEINANZEIGEN_LOCALE
 TIMEZONE = KLEINANZEIGEN_TIMEZONE
+EXTRA_BROWSER_ARGS = KLEINANZEIGEN_BROWSER_ARGS
+BROWSER_CDP = KLEINANZEIGEN_BROWSER_CDP
 FIELD_TIMEOUT_MS = KLEINANZEIGEN_FIELD_TIMEOUT_MS
 READY_TIMEOUT_MS = KLEINANZEIGEN_READY_TIMEOUT_MS
 SECTION_TIMEOUT_MS = KLEINANZEIGEN_SECTION_TIMEOUT_MS
@@ -256,6 +262,18 @@ def import_session(source: Path) -> SessionStatus:
     # Eine neue Datei ist ungeprüft — die Bewertung der alten gilt nicht weiter.
     record_session_verdict(UNKNOWN, "Übernommene Anmeldung ist noch ungeprüft.")
     return read_session_status()
+
+
+def session_lives_in_browser() -> bool:
+    """Trägt der Browser die Anmeldung selbst?
+
+    Beim Browser auf dem Host ist das so: Sein Profil bleibt bestehen, die
+    Anmeldung steckt darin. Eine Datei mit Sitzungsdaten wird dann nicht
+    gebraucht — und ihr Fehlen ist kein Grund, das Veröffentlichen zu
+    verweigern. Ob die Anmeldung wirklich trägt, zeigt ohnehin erst der
+    Seitenaufruf.
+    """
+    return bool(BROWSER_CDP)
 
 
 def discard_session() -> SessionStatus:
@@ -818,6 +836,68 @@ def fill_offer_form(page, listing: Listing, dry_run: bool = True) -> List[str]:
 # --------------------------------------------------------------------------
 # Browser-Lebenszyklus
 # --------------------------------------------------------------------------
+def _cdp_endpoint(url: str) -> str:
+    """Ersetzt den Hostnamen durch seine IP-Adresse.
+
+    Chromium prüft bei DevTools-Anfragen den Host-Header und lässt nur
+    ``localhost`` und IP-Adressen zu; alles andere quittiert es mit HTTP 500.
+    Aus dem Container heraus heißt der Host aber ``host.docker.internal``.
+    Statt den Anwender eine IP eintragen zu lassen, die sich beim nächsten
+    Start von Docker ändern kann, lösen wir den Namen hier selbst auf.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host or host == "localhost":
+        return url
+
+    try:
+        address = socket.gethostbyname(host)
+    except OSError:
+        # Auflösung fehlgeschlagen: unverändert weiterreichen, damit die
+        # Fehlermeldung von Playwright kommt und nicht von hier.
+        return url
+
+    netloc = f"{address}:{parsed.port}" if parsed.port else address
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+def browser_reachable() -> Optional[bool]:
+    """Läuft der Browser auf dem Host und nimmt Verbindungen an?
+
+    ``None`` bedeutet: Die Frage stellt sich nicht, weil der Container seinen
+    eigenen Browser startet.
+
+    Nur ein Verbindungsversuch auf TCP-Ebene, keine Anfrage — das kostet
+    Millisekunden und darf deshalb bei jedem Zeichnen der Oberfläche passieren.
+    """
+    if not BROWSER_CDP:
+        return None
+
+    parsed = urlparse(_cdp_endpoint(BROWSER_CDP))
+    try:
+        with socket.create_connection((parsed.hostname, parsed.port or 80), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _context_options(use_session: bool) -> dict:
+    """Einstellungen des Browserkontexts.
+
+    Sprache und Zeitzone werden gesetzt, weil ein Container von sich aus keine
+    hat: ein englischsprachiger Browser mit UTC auf einer deutschen Seite fällt
+    auf. Auf dem Host ändert es nichts, dort stimmen die Werte ohnehin.
+    """
+    options = {
+        "no_viewport": True,
+        "locale": LOCALE,
+        "timezone_id": TIMEZONE,
+    }
+    if use_session:
+        options["storage_state"] = str(SESSION_FILE)
+    return options
+
+
 @contextmanager
 def _browser_page(use_session: bool = True):
     """Browser, danach zuverlässig geschlossen.
@@ -827,6 +907,39 @@ def _browser_page(use_session: bool = True):
     würde.
     """
     from playwright.sync_api import sync_playwright
+
+    if BROWSER_CDP:
+        with sync_playwright() as p:
+            # Ein fremder Browser: wir hängen uns an, wir starten ihn nicht.
+            browser = p.chromium.connect_over_cdp(_cdp_endpoint(BROWSER_CDP))
+
+            # Den bestehenden Kontext benutzen, keinen neuen anlegen. Dort
+            # sitzt die Anmeldung des Anwenders — mitsamt allem, was die
+            # Website als bekanntes Gerät wiedererkennt. Ein frischer Kontext
+            # wäre privat: keine Cookies, keine Wiedererkennung, und die Seite
+            # verlangt eine Anmeldung, obwohl im Fenster daneben längst eine
+            # besteht.
+            borrowed = bool(browser.contexts)
+            context = (
+                browser.contexts[0]
+                if borrowed
+                else browser.new_context(**_context_options(use_session))
+            )
+
+            page = context.new_page()
+            try:
+                yield page
+            finally:
+                # Nur den eigenen Tab schließen. Kontext und Browser gehören
+                # dem Anwender; sie zu schließen würde ihm sein Fenster unter
+                # den Händen wegnehmen.
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                if not borrowed:
+                    context.close()
+        return
 
     args = [
         # Verhindert Berechtigungs-Blasen des Browsers über der Seite.
@@ -846,6 +959,9 @@ def _browser_page(use_session: bool = True):
         # Abschottung übernimmt hier der Container.
         args += ["--no-sandbox", "--disable-setuid-sandbox"]
 
+    # Zuletzt, damit sich Versuche über die Umgebung durchsetzen können.
+    args += EXTRA_BROWSER_ARGS
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=HEADLESS,
@@ -853,17 +969,7 @@ def _browser_page(use_session: bool = True):
             args=args,
         )
         try:
-            # Sprache und Zeitzone setzen: ein Container hat von sich aus
-            # keine, und ein englischsprachiger Browser mit UTC auf einer
-            # deutschen Seite ist ein weiteres Merkmal, das auffällt.
-            options = {
-                "no_viewport": True,
-                "locale": LOCALE,
-                "timezone_id": TIMEZONE,
-            }
-            if use_session:
-                options["storage_state"] = str(SESSION_FILE)
-            context = browser.new_context(**options)
+            context = browser.new_context(**_context_options(use_session))
             yield context.new_page()
         finally:
             browser.close()
@@ -871,7 +977,11 @@ def _browser_page(use_session: bool = True):
 
 def publish_offer(listing: Listing, dry_run: bool = True) -> List[str]:
     """Startet den Browser mit gespeicherter Session und füllt das Formular."""
-    require_session()
+    # Trägt der Browser die Anmeldung selbst, gibt es keine Datei zu prüfen.
+    # Fehlt die Anmeldung dort, meldet _ensure_logged_in() das gleich nach dem
+    # ersten Seitenaufruf.
+    if not session_lives_in_browser():
+        require_session()
 
     with _browser_page() as page:
         try:
@@ -1003,7 +1113,7 @@ def check_marketplace_session() -> str:
     ein Mensch neu anmelden — das kann kein Tool erledigen.
     """
     status = read_session_status()
-    if not status.usable:
+    if not status.usable and not session_lives_in_browser():
         return f"Nicht angemeldet. {status.describe()}"
 
     try:
