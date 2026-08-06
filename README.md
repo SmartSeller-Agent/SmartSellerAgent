@@ -6,7 +6,7 @@
 **A photo goes in, a finished marketplace listing comes out.**
 
 <!-- Project Shields -->
-[![CI][ci-shield]][ci-url] [![Python][python-shield]][python-url] [![Docker][docker-shield]][docker-url] [![smolagents][smolagents-shield]][smolagents-url] [![Contributors][contributing-shield]][contributing-url]
+[![CI][ci-shield]][ci-url] [![Python][python-shield]][python-url] [![Docker][docker-shield]][docker-url] [![smolagents][smolagents-shield]][smolagents-url] [![Contributors][contributing-shield]][contributing-url] [![License][license-shield]][license-url]
 
 </div>
 
@@ -42,6 +42,7 @@ You upload the picture, thats it. From there a multi-agent system takes over: a 
 - [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende) — login and the two publish switches
 - [Architecture Overview](#architecture-overview) — how the parts fit together
 - [Documentation](#documentation) — the detailed docs in `docs/`
+- [License](#license) — MIT
 
 ## Requirements
 
@@ -256,6 +257,13 @@ The system is built on the principles of a Service-Oriented Architecture (SOA) a
 | [docs/reflection-w14-responsible-ai.md](docs/reflection-w14-responsible-ai.md) | Responsible AI (W14) |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Development setup, tests, branch workflow |
 
+## License
+
+Distributed under the MIT License — use it, change it, ship it, just keep the
+copyright notice. See [LICENSE](LICENSE) for the full text.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
 <!-- MARKDOWN LINKS & IMAGES -->
 [ci-shield]: https://img.shields.io/github/actions/workflow/status/SmartSeller-Agent/SmartSellerAgent/ci.yml?branch=develop&style=flat-square&label=CI
 [ci-url]: https://github.com/SmartSeller-Agent/SmartSellerAgent/actions/workflows/ci.yml
@@ -267,6 +275,8 @@ The system is built on the principles of a Service-Oriented Architecture (SOA) a
 [smolagents-url]: https://github.com/huggingface/smolagents
 [contributing-shield]: https://img.shields.io/github/contributors/SmartSeller-Agent/SmartSellerAgent?style=flat-square
 [contributing-url]: docs/CONTRIBUTING.md
+[license-shield]: https://img.shields.io/badge/License-MIT-3da639?style=flat-square
+[license-url]: LICENSE
 [architecture-shield]: https://img.shields.io/badge/Architecture-darkgreen?style=flat-square
 [architecture-url]: docs/architecture.md
 [requirements-shield]: https://img.shields.io/badge/Requirements-darkgreen?style=flat-square
