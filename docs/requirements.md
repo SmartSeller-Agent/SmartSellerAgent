@@ -51,6 +51,11 @@ The model then answers with the tool call alone. To show the Thought in words, t
 Apart from the model, only the Qwen-specific `/no_think` marker was removed from `src/prompts.yaml` for that run. 
 Both logs show the same five-step structure; what differs is how much of its own deliberation the provider hands back.
 
+**The steps are decisions, not a fixed script.** [agent-run.txt](logs/agent-run.txt) happens to contain two runs of the same task on the same photo, and they take different paths. 
+In the first (from line 43) the browser on the host is not running: the publisher agent calls `check_marketplace_session`, is told so in line 542, stops without calling the publishing tool, and the run ends with `Nicht eingestellt.` in line 709. 
+In the second (from line 749) the orchestrator answers without delegating at all — so the application's own safety net starts the publisher afterwards (line 1190), which this time reaches `publish_listing` in line 1267 and fills the form (`PROBELAUF`, line 1277). 
+Same task, same photo, two different paths. Neither ends in a crash, and neither ends in a claim that something was published when it was not.
+
 <!-- P4 — Documentation:  Evidence: point at [../README.md](../README.md) and this docs folder. -->
 
 <!-- P5 — Commit history: Evidence: `git log --oneline` with at least 10 commits over the project period. --> 
@@ -66,8 +71,8 @@ Both logs show the same five-step structure; what differs is how much of its own
 |----|----------------------------------------------|:----------------:|----------|
 | W1 | Multi-agent setup (orchestrator + subagent)  |:white_check_mark:| `orchestrator` (`managed_agents`), `vision_agent` and `publisher_agent` (in `src/app.py`, with roles and instructions in `src/prompts.yaml`) |
 | W2 | Multimodal input                             |:white_check_mark:| product photos through the vision tool (`src/tools/vision.py`) |
-| W3 | RAG component                                |:x:               | not implemented |
-| W4 | Agentic RAG                                  |:x:               | not implemented |
+| W3 | RAG component                                |:x:               | not implemented, and deliberately so: the knowledge base this system would need is a history of past offers, and that history does not exist yet. The concept is worked out in [W13](reflection-w13-continuous-learning.md) |
+| W4 | Agentic RAG                                  |:x:               | not implemented, same reason as W3. The agent would decide for itself when a comparable item is worth looking up. Why that would help is in [W12](reflection-w12-drift.md): the model's sense of price is frozen at training time, and two web searches are a thin substitute |
 | W5 | Observability (tracing / structured logging) |:white_check_mark:| see `src/tracing.py` or [langfuse tracing 01](figures/langfuse_tracing_01.png) and [langfuse tracing 02](figures/langfuse_tracing_02.png)  in `docs/figures/` |
 | W6 | Prediction service via HTTP API              |:white_check_mark:| `/run-task`, `/profile`, `/marketplace`, ... |
 | W7 | Containerisation via `docker compose up`     |:white_check_mark:| `docker compose up` is working with two configurations (see [README.md](../README.md)) |

@@ -1565,3 +1565,21 @@ def test_a_working_session_is_not_recorded_as_a_problem(session_file, use_fake_b
         marketplace.check_marketplace_session()
 
         assert marketplace.publish_records() == []
+
+
+def test_the_session_check_keeps_quiet_about_a_file_that_says_nothing(
+    monkeypatch, session_file, use_fake_browser
+):
+    """Beobachtet: "Keine gespeicherte Anmeldung ..." gefolgt von "Angemeldet".
+
+    Beim Browser mit eigenem Profil gibt es keine Datei, und ihr Fehlen ist
+    keine Aussage über die Anmeldung. Der Agent gibt diese Meldung wörtlich
+    weiter, also darf sie sich nicht selbst widersprechen.
+    """
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+    use_fake_browser(FakePage())
+
+    answer = marketplace.check_marketplace_session()
+
+    assert "Keine gespeicherte Anmeldung" not in answer
+    assert "Sitzung ist gültig" in answer
