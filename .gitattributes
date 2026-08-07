@@ -1,0 +1,7 @@
+# Shell scripts must keep LF endings, no matter what a contributor's
+# core.autocrlf is set to. They are copied into a Linux image and executed
+# there: with CRLF the shebang reads "#!/bin/sh\r", the kernel looks for an
+# interpreter literally called "/bin/sh\r" and the container dies with
+# "exec /usr/local/bin/entrypoint.sh: no such file or directory" — a message
+# that points at the script rather than at the missing interpreter.
+*.sh text eol=lf

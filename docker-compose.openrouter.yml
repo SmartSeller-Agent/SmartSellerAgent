@@ -2,11 +2,16 @@
 #
 #   docker compose -f docker-compose.openrouter.yml up --build
 #
-# Alternative to the default docker-compose.yml, which runs the models locally
-# in an ollama container. Here there is no ollama service at all: nothing is
-# downloaded, nothing runs on the CPU, and the models answer in seconds instead
-# of minutes. In exchange this needs an OpenRouter API key with credit, and the
-# requests (including the product photos) leave the machine.
+# ...or simply `docker compose up --build`, because .env.example sets
+# COMPOSE_FILE to this file: with a key present this is the recommended way to
+# run the project.
+#
+# The alternative is docker-compose.yml, which runs the models locally in an
+# ollama container and is what starts when there is no .env. Here there is no
+# ollama service at all: nothing is downloaded, nothing runs on the CPU, and
+# the models answer in seconds instead of minutes. In exchange this needs an
+# OpenRouter API key with credit, and the requests (including the product
+# photos) leave the machine.
 #
 # Deliberately a standalone file rather than an override: docker-compose.yml
 # wires api -> ollama-init via depends_on, and Compose 2.23 can neither drop a
@@ -29,16 +34,21 @@ services:
     container_name: smartseller-api
     ports:
       - "8000:8000"
-      # noVNC — see docker-compose.yml for why this is bound to 127.0.0.1.
+      # noVNC — only used in the fallback mode, see docker-compose.yml for why
+      # this is bound to 127.0.0.1.
       - "127.0.0.1:6080:6080"
+    extra_hosts:
+      # Needed on plain Linux so host.docker.internal resolves — see
+      # docker-compose.yml.
+      - "host.docker.internal:host-gateway"
     environment:
       # Both models are OpenAI-protocol compatible, so only the base URL,
       # the key and the model id differ from the local setup.
       TEXT_API_BASE: https://openrouter.ai/api/v1
-      TEXT_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is not set — add it to .env}
+      TEXT_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is empty — add your key to .env, or comment out COMPOSE_FILE there to run the local stack instead}
       TEXT_MODEL_ID: ${OPENROUTER_TEXT_MODEL:-qwen/qwen3-8b}
       VISION_API_BASE: https://openrouter.ai/api/v1
-      VISION_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is not set — add it to .env}
+      VISION_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is empty — add your key to .env, or comment out COMPOSE_FILE there to run the local stack instead}
       VISION_MODEL_ID: ${OPENROUTER_VISION_MODEL:-google/gemini-2.5-flash}
       # Provider-specific request extras as JSON. Left empty on purpose: src/config.py
       # applies a sensible OpenRouter default (reasoning off — required, because
@@ -53,9 +63,17 @@ services:
       # --- kleinanzeigen.de publishing ---------------------------------
       # Same settings as in docker-compose.yml; see there for the reasoning.
       KLEINANZEIGEN_STATE_DIR: /app/.state
-      KLEINANZEIGEN_VNC: "true"
+      # DEFAULT: a browser running on the host, started with
+      # `uv run python -m scripts.host_browser`. The container's own browser is
+      # treated as a different device by the marketplace, which makes it reject
+      # sessions that work everywhere else. An empty KLEINANZEIGEN_BROWSER_CDP=
+      # in .env switches back to it (note the "-" instead of ":-").
+      KLEINANZEIGEN_BROWSER_CDP: ${KLEINANZEIGEN_BROWSER_CDP-http://host.docker.internal:9222}
+      # The virtual screen is only needed for the container's own browser, so it
+      # stays off unless the fallback above is selected.
+      KLEINANZEIGEN_VNC: ${KLEINANZEIGEN_VNC:-false}
       DISPLAY: ":99"
-      KLEINANZEIGEN_HEADLESS: "false"
+      KLEINANZEIGEN_HEADLESS: ${KLEINANZEIGEN_HEADLESS:-false}
       KLEINANZEIGEN_NO_SANDBOX: "true"
       # SAFETY SWITCH, one of two — see docker-compose.yml. Both this and the
       # checkbox in the UI are needed before anything goes live.

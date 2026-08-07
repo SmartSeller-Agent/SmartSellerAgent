@@ -39,16 +39,20 @@ import contextvars
 import json
 import os
 import re
+import socket
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlparse, urlunparse
 
 from smolagents import tool
 
 from src.config import (
+    KLEINANZEIGEN_BROWSER_ARGS,
+    KLEINANZEIGEN_BROWSER_CDP,
     KLEINANZEIGEN_CONFIRM_TIMEOUT_MS,
     KLEINANZEIGEN_FIELD_TIMEOUT_MS,
     KLEINANZEIGEN_HEADLESS,
@@ -76,6 +80,8 @@ NO_SANDBOX = KLEINANZEIGEN_NO_SANDBOX
 LOGIN_TIMEOUT_S = KLEINANZEIGEN_LOGIN_TIMEOUT_S
 LOCALE = KLEINANZEIGEN_LOCALE
 TIMEZONE = KLEINANZEIGEN_TIMEZONE
+EXTRA_BROWSER_ARGS = KLEINANZEIGEN_BROWSER_ARGS
+BROWSER_CDP = KLEINANZEIGEN_BROWSER_CDP
 FIELD_TIMEOUT_MS = KLEINANZEIGEN_FIELD_TIMEOUT_MS
 READY_TIMEOUT_MS = KLEINANZEIGEN_READY_TIMEOUT_MS
 SECTION_TIMEOUT_MS = KLEINANZEIGEN_SECTION_TIMEOUT_MS
@@ -119,6 +125,22 @@ class SessionExpiredError(RuntimeError):
 
 class SessionMissingError(FileNotFoundError):
     """Es wurde noch nie eine Anmeldung gespeichert."""
+
+
+class BrowserUnavailableError(RuntimeError):
+    """Der Browser auf dem Rechner des Anwenders läuft nicht.
+
+    Eigener Fehler, weil die Meldung von Playwright ("connect ECONNREFUSED
+    192.168.65.254:9222") niemandem sagt, was zu tun ist. Hier ist der Fall
+    eindeutig: Es fehlt ein Programm, das nur ein Mensch starten kann.
+    """
+
+
+BROWSER_MISSING_HINT = (
+    "Der Browser auf deinem Rechner läuft nicht. Starte ihn in einem eigenen "
+    "Terminal mit 'uv run python -m scripts.host_browser' und lass das Fenster "
+    "offen."
+)
 
 
 @dataclass
@@ -258,6 +280,18 @@ def import_session(source: Path) -> SessionStatus:
     return read_session_status()
 
 
+def session_lives_in_browser() -> bool:
+    """Trägt der Browser die Anmeldung selbst?
+
+    Beim Browser auf dem Host ist das so: Sein Profil bleibt bestehen, die
+    Anmeldung steckt darin. Eine Datei mit Sitzungsdaten wird dann nicht
+    gebraucht — und ihr Fehlen ist kein Grund, das Veröffentlichen zu
+    verweigern. Ob die Anmeldung wirklich trägt, zeigt ohnehin erst der
+    Seitenaufruf.
+    """
+    return bool(BROWSER_CDP)
+
+
 def discard_session() -> SessionStatus:
     """Wirft die gespeicherte Anmeldung weg.
 
@@ -319,6 +353,7 @@ _publish_records = contextvars.ContextVar("kleinanzeigen_publish_records", defau
 PUBLISHED = "published"      # eine öffentliche Anzeige ist entstanden
 PREVIEW = "preview"          # Formular ausgefüllt, nicht abgesendet
 NOT_LOGGED_IN = "not_logged_in"
+NO_BROWSER = "no_browser"    # der Browser des Anwenders läuft nicht
 INVALID = "invalid"          # Angaben des Modells unbrauchbar
 FAILED = "failed"
 
@@ -340,10 +375,13 @@ def publishing_allowed(allowed: bool):
 
 
 def publish_records() -> List[dict]:
-    """Was innerhalb des laufenden Auftrags versucht wurde.
+    """Was innerhalb des laufenden Auftrags geschehen ist.
 
-    Eine leere Liste heißt: das Tool wurde gar nicht aufgerufen. Behauptet der
-    Agent dann trotzdem, er habe etwas eingestellt, ist das nachweislich falsch.
+    Geschrieben von den Werkzeugen selbst, sowohl beim Einstellen als auch bei
+    der Anmeldeprüfung davor: Auch "niemand ist angemeldet" ist ein Ergebnis,
+    das den Ausgang erklärt. Eine leere Liste heißt, dass keines der beiden
+    Werkzeuge aufgerufen wurde. Behauptet der Agent dann trotzdem, er habe
+    etwas eingestellt, ist das nachweislich falsch.
     """
     records = _publish_records.get()
     return list(records) if records is not None else []
@@ -356,6 +394,16 @@ def _record(outcome: str, detail: str = "") -> str:
     return outcome
 
 
+def _reported(outcome: str, message: str) -> str:
+    """Protokollieren und dasselbe dem Agenten sagen.
+
+    Damit steht in beiden Kanälen dasselbe: in der Antwort an das Modell und
+    in dem Protokoll, das die Oberfläche zeigt.
+    """
+    _record(outcome, message)
+    return message
+
+
 def publishing_enabled() -> bool:
     """Erlaubt diese Installation das Veröffentlichen überhaupt?
 
@@ -364,6 +412,38 @@ def publishing_enabled() -> bool:
     zusätzlich ein Auftrag ausdrücklich darum bittet.
     """
     return os.getenv("KLEINANZEIGEN_ALLOW_PUBLISH", "").lower() in ("1", "true", "yes")
+
+
+def publish_blocker() -> Optional[str]:
+    """Warum kann gerade überhaupt keine Anzeige entstehen?
+
+    Gibt einen Satz für den Anwender zurück oder ``None``, wenn nichts dagegen
+    spricht. Absichtlich billig: ein Verbindungsversuch und ein Blick auf die
+    Datei, kein Seitenaufruf. Deshalb kann diese Prüfung nur die eindeutigen
+    Fälle erkennen — läuft der Browser und ist bloß niemand angemeldet, merkt
+    das erst das Werkzeug selbst und schreibt es ins Protokoll.
+
+    Der Sinn: Der Anwender soll vor dem Anzeigentext erfahren, dass es beim
+    Text bleibt, statt es aus einer ausbleibenden Erfolgsmeldung zu schließen.
+    """
+    if browser_reachable() is False:
+        return BROWSER_MISSING_HINT
+
+    if last_session_verdict().status == REJECTED:
+        return (
+            "Die letzte Prüfung der Anmeldung wurde von kleinanzeigen.de "
+            "abgelehnt. Bitte in der Seitenleiste neu anmelden."
+        )
+
+    # Trägt der Browser die Anmeldung in seinem Profil, sagt unsere Datei
+    # nichts darüber aus — dann wäre ihr Fehlen kein Hinderungsgrund.
+    if not session_lives_in_browser() and not read_session_status().usable:
+        return (
+            "Es liegt keine gültige Anmeldung bei kleinanzeigen.de vor. "
+            "Bitte in der Seitenleiste anmelden."
+        )
+
+    return None
 
 
 def is_dry_run() -> bool:
@@ -818,15 +898,121 @@ def fill_offer_form(page, listing: Listing, dry_run: bool = True) -> List[str]:
 # --------------------------------------------------------------------------
 # Browser-Lebenszyklus
 # --------------------------------------------------------------------------
+def _cdp_endpoint(url: str) -> str:
+    """Ersetzt den Hostnamen durch seine IP-Adresse.
+
+    Chromium prüft bei DevTools-Anfragen den Host-Header und lässt nur
+    ``localhost`` und IP-Adressen zu; alles andere quittiert es mit HTTP 500.
+    Aus dem Container heraus heißt der Host aber ``host.docker.internal``.
+    Statt den Anwender eine IP eintragen zu lassen, die sich beim nächsten
+    Start von Docker ändern kann, lösen wir den Namen hier selbst auf.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host or host == "localhost":
+        return url
+
+    try:
+        address = socket.gethostbyname(host)
+    except OSError:
+        # Auflösung fehlgeschlagen: unverändert weiterreichen, damit die
+        # Fehlermeldung von Playwright kommt und nicht von hier.
+        return url
+
+    netloc = f"{address}:{parsed.port}" if parsed.port else address
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+def browser_reachable() -> Optional[bool]:
+    """Läuft der Browser auf dem Host und nimmt Verbindungen an?
+
+    ``None`` bedeutet: Die Frage stellt sich nicht, weil der Container seinen
+    eigenen Browser startet.
+
+    Nur ein Verbindungsversuch auf TCP-Ebene, keine Anfrage — das kostet
+    Millisekunden und darf deshalb bei jedem Zeichnen der Oberfläche passieren.
+    """
+    if not BROWSER_CDP:
+        return None
+
+    parsed = urlparse(_cdp_endpoint(BROWSER_CDP))
+    try:
+        with socket.create_connection((parsed.hostname, parsed.port or 80), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _context_options(use_session: bool) -> dict:
+    """Einstellungen des Browserkontexts.
+
+    Sprache und Zeitzone werden gesetzt, weil ein Container von sich aus keine
+    hat: ein englischsprachiger Browser mit UTC auf einer deutschen Seite fällt
+    auf. Auf dem Host ändert es nichts, dort stimmen die Werte ohnehin.
+    """
+    options = {
+        "no_viewport": True,
+        "locale": LOCALE,
+        "timezone_id": TIMEZONE,
+    }
+    if use_session:
+        options["storage_state"] = str(SESSION_FILE)
+    return options
+
+
 @contextmanager
-def _browser_page(use_session: bool = True):
+def _browser_page(use_session: bool = True, keep_page_open: bool = False):
     """Browser, danach zuverlässig geschlossen.
 
     ``use_session=False`` startet mit einem leeren Profil — das ist der Fall
     für eine neue Anmeldung, bei der eine alte, ungültige Sitzung nur stören
     würde.
+
+    ``keep_page_open`` lässt den Tab stehen. Sinnvoll nur beim Browser auf dem
+    Host: Dort kann der Anwender das ausgefüllte Formular ansehen und selbst
+    absenden. Im Container wäre es wirkungslos, weil der Browser ohnehin
+    endet.
     """
     from playwright.sync_api import sync_playwright
+
+    if BROWSER_CDP:
+        # Vorher fragen statt an der Verbindung zu scheitern: Playwright meldet
+        # hier ein abgelehntes TCP-Ziel, was den Anwender ratlos zurücklässt.
+        if browser_reachable() is False:
+            raise BrowserUnavailableError(BROWSER_MISSING_HINT)
+
+        with sync_playwright() as p:
+            # Ein fremder Browser: wir hängen uns an, wir starten ihn nicht.
+            browser = p.chromium.connect_over_cdp(_cdp_endpoint(BROWSER_CDP))
+
+            # Den bestehenden Kontext benutzen, keinen neuen anlegen. Dort
+            # sitzt die Anmeldung des Anwenders — mitsamt allem, was die
+            # Website als bekanntes Gerät wiedererkennt. Ein frischer Kontext
+            # wäre privat: keine Cookies, keine Wiedererkennung, und die Seite
+            # verlangt eine Anmeldung, obwohl im Fenster daneben längst eine
+            # besteht.
+            borrowed = bool(browser.contexts)
+            context = (
+                browser.contexts[0]
+                if borrowed
+                else browser.new_context(**_context_options(use_session))
+            )
+
+            page = context.new_page()
+            try:
+                yield page
+            finally:
+                # Nur den eigenen Tab schließen. Kontext und Browser gehören
+                # dem Anwender; sie zu schließen würde ihm sein Fenster unter
+                # den Händen wegnehmen.
+                if not keep_page_open:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
+                if not borrowed:
+                    context.close()
+        return
 
     args = [
         # Verhindert Berechtigungs-Blasen des Browsers über der Seite.
@@ -846,6 +1032,9 @@ def _browser_page(use_session: bool = True):
         # Abschottung übernimmt hier der Container.
         args += ["--no-sandbox", "--disable-setuid-sandbox"]
 
+    # Zuletzt, damit sich Versuche über die Umgebung durchsetzen können.
+    args += EXTRA_BROWSER_ARGS
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=HEADLESS,
@@ -853,17 +1042,7 @@ def _browser_page(use_session: bool = True):
             args=args,
         )
         try:
-            # Sprache und Zeitzone setzen: ein Container hat von sich aus
-            # keine, und ein englischsprachiger Browser mit UTC auf einer
-            # deutschen Seite ist ein weiteres Merkmal, das auffällt.
-            options = {
-                "no_viewport": True,
-                "locale": LOCALE,
-                "timezone_id": TIMEZONE,
-            }
-            if use_session:
-                options["storage_state"] = str(SESSION_FILE)
-            context = browser.new_context(**options)
+            context = browser.new_context(**_context_options(use_session))
             yield context.new_page()
         finally:
             browser.close()
@@ -871,14 +1050,32 @@ def _browser_page(use_session: bool = True):
 
 def publish_offer(listing: Listing, dry_run: bool = True) -> List[str]:
     """Startet den Browser mit gespeicherter Session und füllt das Formular."""
-    require_session()
+    # Trägt der Browser die Anmeldung selbst, gibt es keine Datei zu prüfen.
+    # Fehlt die Anmeldung dort, meldet _ensure_logged_in() das gleich nach dem
+    # ersten Seitenaufruf.
+    if not session_lives_in_browser():
+        require_session()
 
-    with _browser_page() as page:
+    # Beim Probelauf mit sichtbarem Browser bleibt das ausgefüllte Formular
+    # stehen. Der Screenshot ist ein schwacher Ersatz dafür, es selbst
+    # anzusehen — und wer es dann veröffentlichen will, drückt den Knopf der
+    # Website statt einen Schalter umzulegen.
+    keep_open = dry_run and session_lives_in_browser()
+
+    with _browser_page(keep_page_open=keep_open) as page:
         try:
-            return fill_offer_form(page, listing, dry_run=dry_run)
+            log = fill_offer_form(page, listing, dry_run=dry_run)
         except Exception:
             _screenshot(page, "99_error.png")
             raise
+
+    if keep_open:
+        log.append(
+            "Das ausgefüllte Formular bleibt im Browser stehen. Dort kannst du "
+            "es prüfen, ändern und selbst veröffentlichen — oder den Tab "
+            "einfach schließen."
+        )
+    return log
 
 
 # Wie oft nachgesehen wird, ob die Anmeldung inzwischen durch ist.
@@ -913,8 +1110,10 @@ def login_interactive(timeout_s: Optional[int] = None, notify=None) -> List[str]
     if HEADLESS:
         raise RuntimeError(
             "Die Anmeldung braucht einen sichtbaren Browser — headless gibt es "
-            "nichts zu bedienen. Im Container: KLEINANZEIGEN_VNC=true und "
-            "KLEINANZEIGEN_HEADLESS=false setzen (macht docker-compose bereits)."
+            "nichts zu bedienen. Entweder den Browser auf dem eigenen Rechner "
+            "starten (uv run python -m scripts.host_browser) oder für den "
+            "Browser des Containers KLEINANZEIGEN_VNC=true und "
+            "KLEINANZEIGEN_HEADLESS=false setzen."
         )
 
     with _browser_page(use_session=False) as page:
@@ -1003,13 +1202,18 @@ def check_marketplace_session() -> str:
     ein Mensch neu anmelden — das kann kein Tool erledigen.
     """
     status = read_session_status()
-    if not status.usable:
-        return f"Nicht angemeldet. {status.describe()}"
+    if not status.usable and not session_lives_in_browser():
+        # Auch das ist ein Ergebnis, das erklärt, warum keine Anzeige entsteht,
+        # und es gehört deshalb ins Protokoll — sonst bliebe der Ausgang des
+        # Auftrags allein der Erzählung des Modells überlassen.
+        return _reported(NOT_LOGGED_IN, f"Nicht angemeldet. {status.describe()}")
 
     try:
         log = verify_session_online()
+    except BrowserUnavailableError as e:
+        return _reported(NO_BROWSER, str(e))
     except SessionExpiredError as e:
-        return f"Nicht angemeldet. {e}"
+        return _reported(NOT_LOGGED_IN, f"Nicht angemeldet. {e}")
     except Exception as e:
         # Netzwerk- oder Browserproblem: sagt nichts über die Anmeldung aus.
         return f"Anmeldung konnte nicht geprüft werden: {e}"
@@ -1065,6 +1269,10 @@ def publish_listing(
     dry_run = is_dry_run()
     try:
         log = publish_offer(listing, dry_run=dry_run)
+    except BrowserUnavailableError as e:
+        # Kein Fehler der Anmeldung: Es fehlt das Fenster, in dem gearbeitet
+        # würde. Nur ein Mensch kann es öffnen.
+        return _reported(NO_BROWSER, f"Anzeige NICHT erstellt: {e}")
     except (SessionMissingError, SessionExpiredError) as e:
         # Eigener Zweig, weil hier ein Mensch handeln muss: erneut anmelden.
         # Ein Wiederholungsversuch des Agenten wäre sinnlos.

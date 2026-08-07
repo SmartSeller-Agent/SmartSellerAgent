@@ -1,37 +1,159 @@
+<a id="readme-top"></a>
+
+<div align="center">
+
 # SmartSellerAgent
+**A photo goes in, a finished marketplace listing comes out.**
+
+<!-- Project Shields -->
+[![CI][ci-shield]][ci-url] [![Python][python-shield]][python-url] [![Docker][docker-shield]][docker-url] [![smolagents][smolagents-shield]][smolagents-url] [![Contributors][contributing-shield]][contributing-url] [![License][license-shield]][license-url]
+
+</div>
+
+
+<!-- Project Logo -->
+<br />
+<div align="center">
+  <a href="https://github.com/SmartSeller-Agent/SmartSellerAgent">
+    <img src="docs/figures/logo_2.png" alt="Logo" width="100" height="100">
+  </a>  
+  <br>
+  <br>
+
+  Explore the documentation below 
+
+  [![Architecture][architecture-shield]][architecture-url] [![Requirements][requirements-shield]][requirements-url] [![Performance][performance-shield]][performance-url]
+</div>
+
+
 
 ## About the project
-@TODO: Add a brief description of the project.
+
+Selling a used item online is mostly clerical work: figure out what the thing actually is, look up what comparable ones go for, decide on a price, write a title and a description that read well, and then type all of it into a form. 
+
+SmartSellerAgent does that from a single photo.
+
+You upload the picture, thats it. From there a multi-agent system takes over: a vision agent identifies the product, brand and condition; the orchestrator researches realistic second-hand prices with a web search and writes the ad in German. If you ask it to, a publisher agent then drives a real browser through the kleinanzeigen.de offer form and fills everything in, the last click stays yours unless you explicitly hand it over.
+
+
+## Quickstart (OpenRouter)
+
+The recommended path: the models run at **OpenRouter** (so nothing is downloaded and a run takes minutes instead of tens of minutes). 
+
+All you need is Docker and an API key. *(Only the optional publishing step at the end adds one more tool, `uv`.)*
+
+**1. Get a key at [openrouter.ai/keys](https://openrouter.ai/keys)**: 
+It starts with `sk-or-v1-`; **setting a credit limit** on it is a good idea while testing.
+
+**2. Clone and create the `.env`:**
+
+```bash
+git clone https://github.com/SmartSeller-Agent/SmartSellerAgent.git
+cd SmartSellerAgent
+cp .env.example .env
+```
+
+**3. Paste the key into that `.env`**
+it is the one line that is empty on purpose:
+
+```bash
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+**4. Start everything:**
+
+```bash
+docker compose up --build
+```
+
+*No `-f` needed: the template already selects the hosted stack via `COMPOSE_FILE`. Forgetting the key stops the stack right there with a message saying so.*
+
+**5. Open <http://localhost:8501>**:
+- enter you PLZ on first startup
+- upload a product photo and let it run. The result is a German listing with a title, a description and a suggested price.
+
+**Optional: filling the kleinanzeigen.de form.** 
+That part drives a real browser, and shows you the filled-in form on kleinanzeigen.de.
+
+It is the only step that needs more than Docker: [`uv`](https://docs.astral.sh/uv/), the Python project runner. Install it once:
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+*Or through a package manager you already use: `brew install uv` on macOS, `pipx install uv` anywhere. Restart the terminal afterwards so it is on your `PATH` — `uv --version` should then answer.*
+
+That is the only installation. Start the browser in a second terminal and leave it open, then log in once in that window:
+
+```bash
+cd SmartSellerAgent # you have to be in the project root for uv to find the scripts
+uv run python -m scripts.host_browser
+```
+
+*The first run takes a moment: `uv` sets up the environment, and the script fetches the Chromium browser itself (~150 MB) if it is not there yet.*
+
+Nothing goes live by accident: publishing needs `KLEINANZEIGEN_ALLOW_PUBLISH=true` in `.env` *and* the checkbox in the UI. 
+Without both, the form is only filled in for you to check and submit yourself.
+
+No API key, or the photos must not leave the machine? Then skip all of the above and run [Option A2](#option-a2--docker-with-local-models-w7) instead — plain
+`docker compose up --build` with no `.env` at all.
+
+## Contents
+
+- [Quickstart](#quickstart-openrouter) — the short path with hosted models
+- [Requirements](#requirements) — what you need installed
+- [Configuration](#configuration) — the `.env` file and what is in it
+- [How to Run](#how-to-run) — hosted models (A1) or local models (A2)
+- [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende) — login and the two publish switches
+- [Architecture Overview](#architecture-overview) — how the parts fit together
+- [Documentation](#documentation) — the detailed docs in `docs/`
+- [License](#license) — MIT
 
 ## Requirements
 
-Docker with Compose. Nothing else (no Python, no Ollama, no API Keys, even if these are recommended) for the default setup.
+**Docker with Compose** — that is the whole list for running the system. No
+Python, no Ollama and no API key are needed for the self-contained
+[local setup](#option-a2--docker-with-local-models-w7); the recommended
+[hosted setup](#quickstart-openrouter) adds nothing but an OpenRouter key.
 
-```bash
-git clone <REPO-URL>
-cd SmartSellerAgent
-docker compose up --build
-```
+One exception: filling the listing into the kleinanzeigen.de form drives a
+browser on your machine, and that one is started with
+[`uv`](https://docs.astral.sh/uv/) in a second terminal. The
+[Quickstart](#quickstart-openrouter) shows how to install `uv` on Windows, macOS
+and Linux, and [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende)
+explains the rest. Everything up to the finished listing runs in Docker alone.
 
 Working on the code instead of just running it? See [CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ## Configuration
 
-A `.env` file is optional, without one the system starts in local mode with the defaults from [docker-compose.yml](docker-compose.yml). 
-To change anything, copy the template and edit it:
+A `.env` file is optional. Without one the system starts in **local mode** with
+the defaults from [docker-compose.yml](docker-compose.yml), self-contained and
+without any key. To use the faster hosted models, copy the template and put your
+OpenRouter key in it:
 
 ```bash
 cp .env.example .env
 ```
 
+The template sets `COMPOSE_FILE=docker-compose.openrouter.yml`, so from then on
+a plain `docker compose up --build` runs the **hosted stack**. Comment that one
+line out to go back to local models; nothing else changes.
+
 | Variable | Required | Description |
 |---|---|---|
+| `OPENROUTER_API_KEY` | ⚠️ | **Hosted mode** — the stack refuses to start without it |
+| `COMPOSE_FILE` | ❌ | Which stack a plain `docker compose` command uses (set to hosted in the template) |
 | `TEXT_MODEL_ID` | ❌ | Model pulled into the local Ollama container (default `qwen3:1.7b`) |
 | `VISION_MODEL_ID` | ❌ | Vision model pulled locally (default `llava`) |
-| `OPENROUTER_API_KEY` | ⚠️ | **Only for hosted mode** — required by `docker-compose.openrouter.yml` |
 | `OPENROUTER_TEXT_MODEL` | ❌ | Hosted text model (default `qwen/qwen3-8b`) |
 | `OPENROUTER_VISION_MODEL` | ❌ | Hosted vision model (default `google/gemini-2.5-flash`) |
-| `COMPOSE_FILE` | ❌ | Selects the mode once instead of per command (see below) |
 | `LANGFUSE_PUBLIC_KEY` | ❌ | Tracing via Langfuse (W5) — skipped when empty |
 | `LANGFUSE_SECRET_KEY` | ❌ | Tracing via Langfuse (W5) — skipped when empty |
 
@@ -62,7 +184,7 @@ In both cases the same URLs are served once the stack is up:
 | http://localhost:8501 | **Streamlit web UI** — upload a photo, get a listing |
 | http://localhost:8000/docs | Interactive API documentation (Swagger) |
 | http://localhost:8000/health | Health endpoint (W11) |
-| http://localhost:6080/vnc.html | The browser the agent drives, live — see below |
+| http://localhost:6080/vnc.html | The container's browser, live — fallback mode only, see below |
 
 ### Publishing to kleinanzeigen.de
 
@@ -70,11 +192,42 @@ The site has no API, so the agent drives a real browser through the offer form.
 Two things follow from that, and both are visible in the UI:
 
 **You log in yourself.** The site puts a security check and two-factor prompt in
-front of the login, which no script can solve. The container therefore runs a
-browser on a virtual screen and streams it to `localhost:6080`, where you sign in
-once by hand. No password is ever asked for or stored — only the resulting
-session, in a volume that survives `docker compose down`. The same view lets you
-watch the agent fill in the form later.
+front of the login, which no script can solve. No password is ever asked for or
+stored — you sign in by hand once, and only the resulting session is kept. There
+are two ways to get a browser you can do that in:
+
+*A browser on your machine (the default).* Start it once in its own terminal and
+leave it open; the container drives it and the window appears on your desktop:
+
+```bash
+uv run python -m scripts.host_browser
+```
+
+This is the only part of the project that needs `uv` on the host; the
+[Quickstart](#quickstart-openrouter) has the one-line installer for Windows,
+macOS and Linux. Nothing else has to be installed by hand: `uv` builds the
+environment on the first run, and the script downloads the Chromium browser
+itself if it is missing. Everything up to the finished listing runs in Docker
+alone.
+
+No configuration needed, the containers already point at it. The login then
+lives in that browser's own profile, which persists. This is the reliable path:
+the marketplace treats the container's browser as a different device and has
+refused sessions there that work everywhere else.
+
+*A browser inside the container (fallback).* The container then runs its own
+browser on a virtual screen and streams it to `localhost:6080`. No extra
+terminal and no Python on the host, but subject to the device problem above:
+
+```bash
+# in .env — the empty value is what switches the host browser off
+KLEINANZEIGEN_BROWSER_CDP=
+KLEINANZEIGEN_VNC=true
+```
+
+Either way, the sidebar walks you through it: it says whether a browser is
+running, offers a check, and only offers to log in when the check says you are
+not.
 
 **Nothing goes live by accident.** A published ad cannot be taken back, so it
 takes two switches: `KLEINANZEIGEN_ALLOW_PUBLISH=true` in `.env` (the operator
@@ -90,37 +243,45 @@ stop the other with `docker compose down` first.
 ### Option A1 — Docker with hosted models (OpenRouter) *(recommended)*
 
 The models run at OpenRouter. Nothing is downloaded and nothing runs on the CPU.
+This is also what a plain `docker compose up` starts once a `.env` exists.
+
+```bash
+cp .env.example .env     # then paste your key into OPENROUTER_API_KEY
+docker compose up --build
+```
+
+That works without `-f` because [.env.example](.env.example) sets
+`COMPOSE_FILE=docker-compose.openrouter.yml`, and Compose reads that variable
+from `.env`. It applies to every `docker compose` command in this project —
+`up`, `down`, `logs`, all of them. The explicit form does the same thing and
+also works without a `.env`:
 
 ```bash
 docker compose -f docker-compose.openrouter.yml up --build
 ```
 
-Requires `OPENROUTER_API_KEY` in `.env` (see [.env.example](.env.example)); the
-stack refuses to start with a clear error if it is missing. The models used are
-`OPENROUTER_TEXT_MODEL` and `OPENROUTER_VISION_MODEL` — kept separate from the
-local model ids so switching modes needs no edit to `.env`.
-
-**Selecting the mode once instead of per command.** Compose reads `COMPOSE_FILE`
-from `.env`, so a single line there makes plain `docker compose up` use the hosted
-stack:
-
-```bash
-# in .env
-COMPOSE_FILE=docker-compose.openrouter.yml
-```
-
-With that line, every `docker compose` command in this project targets the hosted
-stack — `up`, `down`, `logs`, all of them, without `-f`. Remove or comment it out
-to go back to local.
+`OPENROUTER_API_KEY` is required either way; the stack refuses to start with a
+clear error if it is empty, rather than failing later on the first request. The
+models used are `OPENROUTER_TEXT_MODEL` and `OPENROUTER_VISION_MODEL` — kept
+separate from the local model ids, so switching modes needs no edit beyond the
+`COMPOSE_FILE` line.
 
 ### Option A2 — Docker with local models (W7)
 
 The whole stack — LLM runtime, model download, backend and web UI — starts with a
 single command. Nothing except Docker needs to be installed on the host; neither a
-local Ollama nor a local Python environment is required.
+local Ollama nor a local Python environment is required, and no API key.
 
 ```bash
 docker compose up --build
+```
+
+This is what a plain `docker compose up` does with **no `.env` file at all**. If
+you have a `.env` from the template, comment out its `COMPOSE_FILE` line to come
+back here, or name the file explicitly:
+
+```bash
+docker compose -f docker-compose.yml up --build
 ```
 
 This is what a plain `docker compose up` does with no `.env` and no API key at
@@ -186,9 +347,42 @@ The system is built on the principles of a Service-Oriented Architecture (SOA) a
 | Document | Contents |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Detailed system description: components, data flow, design decisions, limitations |
-| [docs/requirements-fulfilment.md](docs/requirements-fulfilment.md) | Which requirements (P1–P5, W1–W14) are met, with evidence |
+| [docs/requirements.md](docs/requirements.md#requirements-definitions) | Requirements definitions (P1–P5, W1–W14) |
+| [docs/requirements.md](docs/requirements.md#requirements-fulfilment) | Which requirements (P1–P5, W1–W14) are met, with evidence |
 | [docs/performance.md](docs/performance.md) | Measurements and what was optimised |
 | [docs/reflection-w12-drift.md](docs/reflection-w12-drift.md) | Data/concept drift (W12) |
 | [docs/reflection-w13-continuous-learning.md](docs/reflection-w13-continuous-learning.md) | Continuous learning (W13) |
 | [docs/reflection-w14-responsible-ai.md](docs/reflection-w14-responsible-ai.md) | Responsible AI (W14) |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Development setup, tests, branch workflow |
+
+## License
+
+Distributed under the MIT License — use it, change it, ship it, just keep the
+copyright notice. See [LICENSE](LICENSE) for the full text.
+
+## Known Limitations
+
+- The current version can process only one image and adds only one image to the display being created. This will be addressed in a future release (see [![GitHub issue state #47](https://shields.io/badge/GitHub_issue_47-red?style=flat-square)](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/47)).
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- MARKDOWN LINKS & IMAGES -->
+[ci-shield]: https://img.shields.io/github/actions/workflow/status/SmartSeller-Agent/SmartSellerAgent/ci.yml?branch=develop&style=flat-square
+[ci-url]: https://github.com/SmartSeller-Agent/SmartSellerAgent/actions/workflows/ci.yml
+[python-shield]: https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white
+[python-url]: pyproject.toml
+[docker-shield]: https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white
+[docker-url]: docker-compose.yml
+[smolagents-shield]: https://img.shields.io/badge/agents-smolagents-FF9D00?style=flat-square
+[smolagents-url]: https://github.com/huggingface/smolagents
+[contributing-shield]: https://img.shields.io/github/contributors/SmartSeller-Agent/SmartSellerAgent?style=flat-square
+[contributing-url]: docs/CONTRIBUTING.md
+[license-shield]: https://img.shields.io/badge/License-MIT-3da639?style=flat-square
+[license-url]: LICENSE
+
+[architecture-shield]: https://img.shields.io/badge/Architecture-0c3727?style=for-the-badge
+[architecture-url]: docs/architecture.md
+[requirements-shield]: https://img.shields.io/badge/Requirements-0c3727?style=for-the-badge
+[requirements-url]: docs/requirements.md
+[performance-shield]: https://img.shields.io/badge/Performance-0c3727?style=for-the-badge
+[performance-url]: docs/performance.md
