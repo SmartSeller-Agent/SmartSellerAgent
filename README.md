@@ -15,14 +15,18 @@
 <br />
 <div align="center">
   <a href="https://github.com/SmartSeller-Agent/SmartSellerAgent">
-    <img src="docs/figures/logo_2.png" alt="Logo" width="100" height="100">
+    <img src="docs/figures/logo_2.png" alt="Logo" width="150" height="150">
   </a>  
   <br>
   <br>
 
-  Explore the documentation below 
-
+  :arrow_double_down: <u><b> Explore the documentation below </b> </u> :arrow_double_down:
   [![Architecture][architecture-shield]][architecture-url] [![Requirements][requirements-shield]][requirements-url] [![Performance][performance-shield]][performance-url]
+
+  <b></b>
+
+  <b> Problems </b> :question: 
+  [See known limitations](#known-limitations) or [open an issue](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/new)
 </div>
 
 
@@ -38,9 +42,11 @@ You upload the picture, thats it. From there a multi-agent system takes over: a 
 
 ## Quickstart (OpenRouter)
 
-The recommended path: the models run at **OpenRouter** (so nothing is downloaded and a run takes minutes instead of tens of minutes). 
-
-All you need is Docker and an API key. *(Only the optional publishing step at the end adds one more tool, `uv`.)*
+> [!HINT]
+> The recommended way: all models run at **OpenRouter** (no models are downloaded and a run takes minutes instead of tens of minutes). 
+>
+> All you need is Docker and an API key. 
+> *(Only the optional publishing step at the end adds one more tool, `uv`.)*
 
 **1. Get a key at [openrouter.ai/keys](https://openrouter.ai/keys)**: 
 It starts with `sk-or-v1-`; **setting a credit limit** on it is a good idea while testing.
