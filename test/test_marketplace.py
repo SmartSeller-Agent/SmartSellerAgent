@@ -1425,3 +1425,143 @@ def test_tool_reports_login_problems_as_something_a_human_must_fix(
     # der publisher_agent gibt genau sie wörtlich weiter.
     assert result.startswith("Anzeige NICHT erstellt")
     assert str(error) in result
+
+
+# --------------------------------------------------------------------------
+# Vorab: kann überhaupt eine Anzeige entstehen?
+# --------------------------------------------------------------------------
+# Beobachtet: Ohne Anmeldung lief der Auftrag durch und lieferte den fertigen
+# Anzeigentext, aber die Oberfläche meldete nur, der Agent habe das Tool nicht
+# aufgerufen. Das klingt nach einem Fehler und ist doch der Normalfall — es
+# fehlte schlicht der Browser oder die Anmeldung.
+def test_a_stopped_browser_is_named_as_the_reason(monkeypatch):
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+    monkeypatch.setattr(marketplace, "browser_reachable", lambda: False)
+
+    blocker = marketplace.publish_blocker()
+
+    assert blocker is not None
+    # Der Anwender muss erfahren, was er tun kann.
+    assert "scripts.host_browser" in blocker
+
+
+def test_a_missing_login_is_named_as_the_reason(monkeypatch, session_file):
+    """Im Container trägt die Datei die Anmeldung — fehlt sie, fehlt sie."""
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "")
+
+    blocker = marketplace.publish_blocker()
+
+    assert blocker is not None
+    assert "anmelden" in blocker
+
+
+def test_a_rejected_login_is_named_as_the_reason(monkeypatch):
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+    monkeypatch.setattr(marketplace, "browser_reachable", lambda: True)
+    marketplace.record_session_verdict(marketplace.REJECTED, "abgelehnt")
+
+    assert marketplace.publish_blocker() is not None
+
+
+def test_nothing_stands_in_the_way_when_the_browser_carries_the_login(monkeypatch):
+    """Die Datei sagt beim Browser mit eigenem Profil nichts aus.
+
+    Ihr Fehlen darf deshalb kein Hinderungsgrund sein — sonst meldete die
+    Oberfläche ein Problem, während im Fenster daneben das Konto offen steht.
+    """
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+    monkeypatch.setattr(marketplace, "browser_reachable", lambda: True)
+
+    assert marketplace.publish_blocker() is None
+
+
+def test_the_check_does_not_open_a_page(monkeypatch, session_file):
+    """Sie läuft bei jedem Zeichnen der Oberfläche — sie muss billig bleiben."""
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "")
+    monkeypatch.setattr(
+        marketplace,
+        "_browser_page",
+        lambda *_a, **_k: pytest.fail("Für diese Auskunft darf kein Browser starten"),
+    )
+
+    marketplace.publish_blocker()
+
+
+# --------------------------------------------------------------------------
+# Der fehlende Browser als eigener Fall
+# --------------------------------------------------------------------------
+def test_a_stopped_browser_is_reported_in_words_instead_of_a_refused_socket(monkeypatch):
+    """Playwright meldet 'connect ECONNREFUSED 192.168.65.254:9222'.
+
+    Das steht sonst als Begründung im Frontend und sagt niemandem, was zu tun ist.
+    """
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+    monkeypatch.setattr(marketplace, "browser_reachable", lambda: False)
+
+    with pytest.raises(marketplace.BrowserUnavailableError, match="host_browser"):
+        with marketplace._browser_page():
+            pytest.fail("Es darf gar nicht erst verbunden werden")
+
+
+def test_the_publish_tool_records_a_missing_browser_separately(monkeypatch, listing):
+    """Nicht als Anmeldeproblem: Die Anmeldung kann tadellos sein."""
+    def no_browser(*_args, **_kwargs):
+        raise marketplace.BrowserUnavailableError(marketplace.BROWSER_MISSING_HINT)
+
+    monkeypatch.setattr(marketplace, "publish_offer", no_browser)
+
+    with marketplace.publishing_allowed(True):
+        result = marketplace.publish_listing(
+            title=listing.title, description=listing.description, price=listing.price
+        )
+        records = marketplace.publish_records()
+
+    assert [r["outcome"] for r in records] == [marketplace.NO_BROWSER]
+    assert result.startswith("Anzeige NICHT erstellt")
+    # Und die Anmeldung wird dabei nicht in Verruf gebracht.
+    assert marketplace.last_session_verdict().status != marketplace.REJECTED
+
+
+def test_the_session_check_writes_down_that_nobody_is_logged_in(monkeypatch, session_file):
+    """Sonst bliebe das Protokoll leer, obwohl der Grund bekannt ist.
+
+    Der publisher_agent bricht nach dieser Auskunft ab und ruft das
+    Veröffentlichungs-Tool gar nicht mehr auf. Ohne Eintrag sähe der Lauf aus
+    wie einer, in dem der Agent den Schritt schlicht vergessen hat.
+    """
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "")
+
+    with marketplace.publishing_allowed(True):
+        answer = marketplace.check_marketplace_session()
+        records = marketplace.publish_records()
+
+    assert answer.startswith("Nicht angemeldet")
+    assert [r["outcome"] for r in records] == [marketplace.NOT_LOGGED_IN]
+
+
+def test_the_session_check_writes_down_a_missing_browser(monkeypatch, session_file):
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "http://host.docker.internal:9222")
+    monkeypatch.setattr(marketplace, "browser_reachable", lambda: False)
+
+    def no_browser():
+        raise marketplace.BrowserUnavailableError(marketplace.BROWSER_MISSING_HINT)
+
+    monkeypatch.setattr(marketplace, "verify_session_online", no_browser)
+
+    with marketplace.publishing_allowed(True):
+        answer = marketplace.check_marketplace_session()
+        records = marketplace.publish_records()
+
+    assert "host_browser" in answer
+    assert [r["outcome"] for r in records] == [marketplace.NO_BROWSER]
+
+
+def test_a_working_session_is_not_recorded_as_a_problem(session_file, use_fake_browser):
+    """Das Protokoll sammelt Gründe, keine Routine."""
+    _write_session(session_file, [{"name": "auth", "expires": time.time() + 3600}])
+    use_fake_browser(FakePage())
+
+    with marketplace.publishing_allowed(True):
+        marketplace.check_marketplace_session()
+
+        assert marketplace.publish_records() == []

@@ -9,14 +9,13 @@ Umgebung, die die Website von dir kennt.
 
 Nebeneffekt: Das Fenster steht auf dem Desktop statt hinter noVNC.
 
+Das ist der Normalfall: docker-compose.yml erwartet diesen Browser von sich aus
+(KLEINANZEIGEN_BROWSER_CDP zeigt auf host.docker.internal:9222). Eingetragen
+werden muss dafür nichts.
+
 Aufruf (in einem eigenen Terminal, das offen bleibt):
 
     uv run python -m scripts.host_browser
-
-Danach in der .env eintragen und die Container neu starten:
-
-    KLEINANZEIGEN_BROWSER_CDP=http://host.docker.internal:9222
-    KLEINANZEIGEN_VNC=false
 
 Zur Sicherheit: Die Fernsteuerung lauscht auf allen Schnittstellen, sonst
 käme der Container nicht heran. Wer den Port erreicht, steuert diesen Browser.
@@ -61,9 +60,9 @@ def main() -> None:
         print(f"Browser läuft. Fernsteuerung auf Port {PORT}.")
         print(f"Profil: {PROFILE_DIR}")
         print()
-        print("In der .env eintragen und die Container neu starten:")
-        print("  KLEINANZEIGEN_BROWSER_CDP=http://host.docker.internal:9222")
-        print("  KLEINANZEIGEN_VNC=false")
+        print("Die Container finden ihn von selbst — in der .env ist dafür")
+        print("nichts einzutragen. Läuft die Anwendung schon, genügt in der")
+        print("Seitenleiste 'Erneut nach dem Browser suchen'.")
         print()
         print("Fenster offen lassen. Beenden mit Strg+C.")
 

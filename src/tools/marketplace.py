@@ -127,6 +127,22 @@ class SessionMissingError(FileNotFoundError):
     """Es wurde noch nie eine Anmeldung gespeichert."""
 
 
+class BrowserUnavailableError(RuntimeError):
+    """Der Browser auf dem Rechner des Anwenders läuft nicht.
+
+    Eigener Fehler, weil die Meldung von Playwright ("connect ECONNREFUSED
+    192.168.65.254:9222") niemandem sagt, was zu tun ist. Hier ist der Fall
+    eindeutig: Es fehlt ein Programm, das nur ein Mensch starten kann.
+    """
+
+
+BROWSER_MISSING_HINT = (
+    "Der Browser auf deinem Rechner läuft nicht. Starte ihn in einem eigenen "
+    "Terminal mit 'uv run python -m scripts.host_browser' und lass das Fenster "
+    "offen."
+)
+
+
 @dataclass
 class SessionStatus:
     """Was sich über die Anmeldung sagen lässt, ohne einen Browser zu starten."""
@@ -337,6 +353,7 @@ _publish_records = contextvars.ContextVar("kleinanzeigen_publish_records", defau
 PUBLISHED = "published"      # eine öffentliche Anzeige ist entstanden
 PREVIEW = "preview"          # Formular ausgefüllt, nicht abgesendet
 NOT_LOGGED_IN = "not_logged_in"
+NO_BROWSER = "no_browser"    # der Browser des Anwenders läuft nicht
 INVALID = "invalid"          # Angaben des Modells unbrauchbar
 FAILED = "failed"
 
@@ -358,10 +375,13 @@ def publishing_allowed(allowed: bool):
 
 
 def publish_records() -> List[dict]:
-    """Was innerhalb des laufenden Auftrags versucht wurde.
+    """Was innerhalb des laufenden Auftrags geschehen ist.
 
-    Eine leere Liste heißt: das Tool wurde gar nicht aufgerufen. Behauptet der
-    Agent dann trotzdem, er habe etwas eingestellt, ist das nachweislich falsch.
+    Geschrieben von den Werkzeugen selbst, sowohl beim Einstellen als auch bei
+    der Anmeldeprüfung davor: Auch "niemand ist angemeldet" ist ein Ergebnis,
+    das den Ausgang erklärt. Eine leere Liste heißt, dass keines der beiden
+    Werkzeuge aufgerufen wurde. Behauptet der Agent dann trotzdem, er habe
+    etwas eingestellt, ist das nachweislich falsch.
     """
     records = _publish_records.get()
     return list(records) if records is not None else []
@@ -374,6 +394,16 @@ def _record(outcome: str, detail: str = "") -> str:
     return outcome
 
 
+def _reported(outcome: str, message: str) -> str:
+    """Protokollieren und dasselbe dem Agenten sagen.
+
+    Damit steht in beiden Kanälen dasselbe: in der Antwort an das Modell und
+    in dem Protokoll, das die Oberfläche zeigt.
+    """
+    _record(outcome, message)
+    return message
+
+
 def publishing_enabled() -> bool:
     """Erlaubt diese Installation das Veröffentlichen überhaupt?
 
@@ -382,6 +412,38 @@ def publishing_enabled() -> bool:
     zusätzlich ein Auftrag ausdrücklich darum bittet.
     """
     return os.getenv("KLEINANZEIGEN_ALLOW_PUBLISH", "").lower() in ("1", "true", "yes")
+
+
+def publish_blocker() -> Optional[str]:
+    """Warum kann gerade überhaupt keine Anzeige entstehen?
+
+    Gibt einen Satz für den Anwender zurück oder ``None``, wenn nichts dagegen
+    spricht. Absichtlich billig: ein Verbindungsversuch und ein Blick auf die
+    Datei, kein Seitenaufruf. Deshalb kann diese Prüfung nur die eindeutigen
+    Fälle erkennen — läuft der Browser und ist bloß niemand angemeldet, merkt
+    das erst das Werkzeug selbst und schreibt es ins Protokoll.
+
+    Der Sinn: Der Anwender soll vor dem Anzeigentext erfahren, dass es beim
+    Text bleibt, statt es aus einer ausbleibenden Erfolgsmeldung zu schließen.
+    """
+    if browser_reachable() is False:
+        return BROWSER_MISSING_HINT
+
+    if last_session_verdict().status == REJECTED:
+        return (
+            "Die letzte Prüfung der Anmeldung wurde von kleinanzeigen.de "
+            "abgelehnt. Bitte in der Seitenleiste neu anmelden."
+        )
+
+    # Trägt der Browser die Anmeldung in seinem Profil, sagt unsere Datei
+    # nichts darüber aus — dann wäre ihr Fehlen kein Hinderungsgrund.
+    if not session_lives_in_browser() and not read_session_status().usable:
+        return (
+            "Es liegt keine gültige Anmeldung bei kleinanzeigen.de vor. "
+            "Bitte in der Seitenleiste anmelden."
+        )
+
+    return None
 
 
 def is_dry_run() -> bool:
@@ -914,6 +976,11 @@ def _browser_page(use_session: bool = True, keep_page_open: bool = False):
     from playwright.sync_api import sync_playwright
 
     if BROWSER_CDP:
+        # Vorher fragen statt an der Verbindung zu scheitern: Playwright meldet
+        # hier ein abgelehntes TCP-Ziel, was den Anwender ratlos zurücklässt.
+        if browser_reachable() is False:
+            raise BrowserUnavailableError(BROWSER_MISSING_HINT)
+
         with sync_playwright() as p:
             # Ein fremder Browser: wir hängen uns an, wir starten ihn nicht.
             browser = p.chromium.connect_over_cdp(_cdp_endpoint(BROWSER_CDP))
@@ -1043,8 +1110,10 @@ def login_interactive(timeout_s: Optional[int] = None, notify=None) -> List[str]
     if HEADLESS:
         raise RuntimeError(
             "Die Anmeldung braucht einen sichtbaren Browser — headless gibt es "
-            "nichts zu bedienen. Im Container: KLEINANZEIGEN_VNC=true und "
-            "KLEINANZEIGEN_HEADLESS=false setzen (macht docker-compose bereits)."
+            "nichts zu bedienen. Entweder den Browser auf dem eigenen Rechner "
+            "starten (uv run python -m scripts.host_browser) oder für den "
+            "Browser des Containers KLEINANZEIGEN_VNC=true und "
+            "KLEINANZEIGEN_HEADLESS=false setzen."
         )
 
     with _browser_page(use_session=False) as page:
@@ -1134,12 +1203,17 @@ def check_marketplace_session() -> str:
     """
     status = read_session_status()
     if not status.usable and not session_lives_in_browser():
-        return f"Nicht angemeldet. {status.describe()}"
+        # Auch das ist ein Ergebnis, das erklärt, warum keine Anzeige entsteht,
+        # und es gehört deshalb ins Protokoll — sonst bliebe der Ausgang des
+        # Auftrags allein der Erzählung des Modells überlassen.
+        return _reported(NOT_LOGGED_IN, f"Nicht angemeldet. {status.describe()}")
 
     try:
         log = verify_session_online()
+    except BrowserUnavailableError as e:
+        return _reported(NO_BROWSER, str(e))
     except SessionExpiredError as e:
-        return f"Nicht angemeldet. {e}"
+        return _reported(NOT_LOGGED_IN, f"Nicht angemeldet. {e}")
     except Exception as e:
         # Netzwerk- oder Browserproblem: sagt nichts über die Anmeldung aus.
         return f"Anmeldung konnte nicht geprüft werden: {e}"
@@ -1195,6 +1269,10 @@ def publish_listing(
     dry_run = is_dry_run()
     try:
         log = publish_offer(listing, dry_run=dry_run)
+    except BrowserUnavailableError as e:
+        # Kein Fehler der Anmeldung: Es fehlt das Fenster, in dem gearbeitet
+        # würde. Nur ein Mensch kann es öffnen.
+        return _reported(NO_BROWSER, f"Anzeige NICHT erstellt: {e}")
     except (SessionMissingError, SessionExpiredError) as e:
         # Eigener Zweig, weil hier ein Mensch handeln muss: erneut anmelden.
         # Ein Wiederholungsversuch des Agenten wäre sinnlos.

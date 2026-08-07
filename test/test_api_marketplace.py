@@ -29,11 +29,31 @@ def profile_file(monkeypatch, tmp_path):
     return path
 
 
+@pytest.fixture(autouse=True)
+def isolated_session(tmp_path, monkeypatch):
+    """Der Ausgang darf nicht davon abhängen, ob der Entwickler angemeldet ist.
+
+    Sonst läuft eine echte `.state/kleinanzeigen_session.json` mit, und
+    dieselben Tests verhalten sich in der CI anders als hier — ein grüner Lauf
+    sagte dann nichts.
+    """
+    monkeypatch.setattr(marketplace, "SESSION_FILE", tmp_path / "kleinanzeigen_session.json")
+    monkeypatch.setattr(marketplace, "BROWSER_CDP", "")
+    marketplace.record_session_verdict(marketplace.UNKNOWN, "")
+
+
 @pytest.fixture
 def session_file(tmp_path, monkeypatch):
     path = tmp_path / "kleinanzeigen_session.json"
     monkeypatch.setattr(marketplace, "SESSION_FILE", path)
     return path
+
+
+@pytest.fixture
+def logged_in(session_file):
+    """Eine gültige Anmeldung — sonst steht dem Einstellen etwas im Weg."""
+    session_file.write_bytes(_session_bytes())
+    return session_file
 
 
 def _session_bytes(expires_in=3600):
@@ -189,11 +209,14 @@ def test_the_response_says_what_the_tool_did_not_what_the_agent_claims(
     assert [a["outcome"] for a in body["publish_attempts"]] == ["preview"]
 
 
-def test_a_forgotten_publishing_step_is_made_up_for(client, monkeypatch):
+def test_a_forgotten_publishing_step_is_made_up_for(client, monkeypatch, logged_in):
     """Der beobachtete Fall: Der Orchestrator verfing sich in Websuchen,
     erreichte sein Schrittlimit und behauptete in der erzwungenen
     Schlussantwort, die Anzeige sei eingestellt — beauftragt hatte er
-    niemanden."""
+    niemanden.
+
+    Nachgeholt wird nur, wenn es überhaupt gehen kann, deshalb die Anmeldung.
+    """
     monkeypatch.setattr(marketplace, "publish_offer", lambda listing_arg, dry_run: ["ok"])
 
     class ForgetfulOrchestrator:
@@ -423,3 +446,81 @@ def test_a_rejected_upload_leaves_the_existing_login_alone(client, session_file)
     )
 
     assert session_file.read_bytes() == before
+
+
+# --------------------------------------------------------------------------
+# Ohne Anmeldung: der Text entsteht, mehr nicht — und das steht auch da
+# --------------------------------------------------------------------------
+def test_the_answer_says_why_only_the_text_came_out(client, monkeypatch):
+    """Beobachtet: Der Lauf ohne Anmeldung ist gewollt und funktioniert.
+
+    Die Auskunft danach war aber irreführend — sie klang nach einem
+    vergessenen Arbeitsschritt, während schlicht niemand angemeldet war.
+    """
+    class Orchestrator:
+        def run(self, task):
+            return "## Titel\nRegal\n\n## Status\nDie Anzeige wurde eingestellt."
+
+    monkeypatch.setattr(app_module, "orchestrator", Orchestrator())
+    monkeypatch.setattr(
+        app_module,
+        "publisher_agent",
+        type("Nie", (), {"run": lambda self, task: pytest.fail("darf nicht laufen")})(),
+    )
+
+    body = client.post(
+        "/run-task", json={"task_name": "create_and_publish_listing"}
+    ).json()
+
+    # Der Text ist da und bleibt brauchbar.
+    assert "Regal" in body["result"]
+    # Und daneben steht der Grund, statt dass der Anwender ihn erraten muss.
+    assert "anmelden" in body["publish_blocker"]
+
+
+def test_a_hopeless_publishing_step_is_not_retried(client, monkeypatch):
+    """Der zweite Anlauf endete am selben Hindernis und kostete eine
+    Modellrunde — lokal sind das Minuten."""
+    class Orchestrator:
+        def run(self, task):
+            return "fertiger Text"
+
+    monkeypatch.setattr(app_module, "orchestrator", Orchestrator())
+    monkeypatch.setattr(
+        app_module,
+        "publisher_agent",
+        type("Nie", (), {"run": lambda self, task: pytest.fail("darf nicht laufen")})(),
+    )
+
+    body = client.post(
+        "/run-task", json={"task_name": "create_and_publish_listing"}
+    ).json()
+
+    assert body["publish_attempts"] == []
+    assert body["publish_blocker"] is not None
+
+
+def test_nothing_is_blamed_when_everything_is_ready(client, monkeypatch, logged_in):
+    class Orchestrator:
+        def run(self, task):
+            marketplace.publish_listing(
+                title="Regal", description="gut erhalten", price=20
+            )
+            return "fertig"
+
+    monkeypatch.setattr(marketplace, "publish_offer", lambda listing_arg, dry_run: ["ok"])
+    monkeypatch.setattr(app_module, "orchestrator", Orchestrator())
+
+    body = client.post(
+        "/run-task", json={"task_name": "create_and_publish_listing"}
+    ).json()
+
+    assert body["publish_blocker"] is None
+    assert [a["outcome"] for a in body["publish_attempts"]] == ["preview"]
+
+
+def test_the_sidebar_learns_the_reason_before_a_run(client):
+    """Ein Lauf dauert Minuten — die Enttäuschung danach ist vermeidbar."""
+    body = client.get("/marketplace/session").json()
+
+    assert "anmelden" in body["publish_blocker"]
