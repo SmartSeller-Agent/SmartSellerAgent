@@ -16,10 +16,12 @@
 <div align="center">
   <a href="https://github.com/SmartSeller-Agent/SmartSellerAgent">
     <img src="docs/figures/logo_2.png" alt="Logo" width="100" height="100">
-  </a>
+  </a>  
   <br>
-  Explore the documentation below!
-  
+  <br>
+
+  Explore the documentation below 
+
   [![Architecture][architecture-shield]][architecture-url] [![Requirements][requirements-shield]][requirements-url] [![Performance][performance-shield]][performance-url]
 </div>
 
@@ -250,7 +252,8 @@ The system is built on the principles of a Service-Oriented Architecture (SOA) a
 | Document | Contents |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Detailed system description: components, data flow, design decisions, limitations |
-| [docs/requirements-fulfilment.md](docs/requirements-fulfilment.md) | Which requirements (P1–P5, W1–W14) are met, with evidence |
+| [docs/requirements.md](docs/requirements.md#requirements-definitions) | Requirements definitions (P1–P5, W1–W14) |
+| [docs/requirements.md](docs/requirements.md#requirements-fulfilment) | Which requirements (P1–P5, W1–W14) are met, with evidence |
 | [docs/performance.md](docs/performance.md) | Measurements and what was optimised |
 | [docs/reflection-w12-drift.md](docs/reflection-w12-drift.md) | Data/concept drift (W12) |
 | [docs/reflection-w13-continuous-learning.md](docs/reflection-w13-continuous-learning.md) | Continuous learning (W13) |
@@ -265,7 +268,7 @@ copyright notice. See [LICENSE](LICENSE) for the full text.
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- MARKDOWN LINKS & IMAGES -->
-[ci-shield]: https://img.shields.io/github/actions/workflow/status/SmartSeller-Agent/SmartSellerAgent/ci.yml?branch=develop&style=flat-square&label=CI
+[ci-shield]: https://img.shields.io/github/actions/workflow/status/SmartSeller-Agent/SmartSellerAgent/ci.yml?branch=develop&style=flat-square
 [ci-url]: https://github.com/SmartSeller-Agent/SmartSellerAgent/actions/workflows/ci.yml
 [python-shield]: https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white
 [python-url]: pyproject.toml
@@ -277,9 +280,10 @@ copyright notice. See [LICENSE](LICENSE) for the full text.
 [contributing-url]: docs/CONTRIBUTING.md
 [license-shield]: https://img.shields.io/badge/License-MIT-3da639?style=flat-square
 [license-url]: LICENSE
-[architecture-shield]: https://img.shields.io/badge/Architecture-darkgreen?style=flat-square
+
+[architecture-shield]: https://img.shields.io/badge/Architecture-0c3727?style=for-the-badge
 [architecture-url]: docs/architecture.md
-[requirements-shield]: https://img.shields.io/badge/Requirements-darkgreen?style=flat-square
-[requirements-url]: docs/requirements-fulfilment.md
-[performance-shield]: https://img.shields.io/badge/Performance-darkgreen?style=flat-square
+[requirements-shield]: https://img.shields.io/badge/Requirements-0c3727?style=for-the-badge
+[requirements-url]: docs/requirements.md
+[performance-shield]: https://img.shields.io/badge/Performance-0c3727?style=for-the-badge
 [performance-url]: docs/performance.md
