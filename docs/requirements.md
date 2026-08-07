@@ -20,8 +20,8 @@ The requirements that were not met were intentionally left unmet, as they could 
 |----|--------------------------------------------------------------|:----------------:|---|
 | P1 | Genuine AI agent with tool usage                             |:warning:         | four real tools (web search, vision, margin calculation and publishing) NO SCREENSHOT/LOG |
 | P2 | TAO cycle visible, ≥3 steps                                  |:warning:         | build in but no screenshots/logs |
-| P3 | Established agent framework                                  |:warning:         | build in but no reason given |
-| P4 | README with description, architecture, installation, example |:white_check_mark:| see [README.md](../README.md) |
+| P3 | Established agent framework                                  |:white_check_mark:| see [architecture.md](architecture.md#4-design-decisions) (or [german version](architecture.md#4-entwurfsentscheidungen)) for the framework overview |
+| P4 | README with description, architecture, installation, example |:white_check_mark:| see [README.md](../README.md) for installation instructions and [architecture.md](architecture.md) for the architecture overview |
 | P5 | Git repository with meaningful commit history                |:white_check_mark:| see [activity on GitHub](https://github.com/SmartSeller-Agent/SmartSellerAgent/activity) or `git log --oneline` |
 
 ### :warning: See P requirements below for missing evidence

@@ -21,11 +21,13 @@
   <br>
 
   :arrow_double_down: <u><b> Explore the documentation below </b> </u> :arrow_double_down:
+
   [![Architecture][architecture-shield]][architecture-url] [![Requirements][requirements-shield]][requirements-url] [![Performance][performance-shield]][performance-url]
 
   <b></b>
 
   <b> Problems </b> :question: 
+
   [See known limitations](#known-limitations) or [open an issue](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/new)
 </div>
 
@@ -39,10 +41,20 @@ SmartSellerAgent does that from a single photo.
 
 You upload the picture, thats it. From there a multi-agent system takes over: a vision agent identifies the product, brand and condition; the orchestrator researches realistic second-hand prices with a web search and writes the ad in German. If you ask it to, a publisher agent then drives a real browser through the kleinanzeigen.de offer form and fills everything in, the last click stays yours unless you explicitly hand it over.
 
+## Contents
+
+- [Quickstart](#quickstart-openrouter) — the short path with hosted models
+- [Requirements](#requirements) — what you need installed
+- [Configuration](#configuration) — the `.env` file and what is in it
+- [How to Run](#how-to-run) — hosted models (A1) or local models (A2)
+- [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende) — login and the two publish switches
+- [Architecture Overview](#architecture-overview) — how the parts fit together
+- [Documentation](#documentation) — the detailed docs in `docs/`
+- [License](#license) — MIT
 
 ## Quickstart (OpenRouter)
 
-> [!HINT]
+> [!TIP]
 > The recommended way: all models run at **OpenRouter** (no models are downloaded and a run takes minutes instead of tens of minutes). 
 >
 > All you need is Docker and an API key. 
@@ -109,17 +121,6 @@ Without both, the form is only filled in for you to check and submit yourself.
 
 No API key, or the photos must not leave the machine? Then skip all of the above and run [Option A2](#option-a2--docker-with-local-models-w7) instead — plain
 `docker compose up --build` with no `.env` at all.
-
-## Contents
-
-- [Quickstart](#quickstart-openrouter) — the short path with hosted models
-- [Requirements](#requirements) — what you need installed
-- [Configuration](#configuration) — the `.env` file and what is in it
-- [How to Run](#how-to-run) — hosted models (A1) or local models (A2)
-- [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende) — login and the two publish switches
-- [Architecture Overview](#architecture-overview) — how the parts fit together
-- [Documentation](#documentation) — the detailed docs in `docs/`
-- [License](#license) — MIT
 
 ## Requirements
 
@@ -366,9 +367,17 @@ The system is built on the principles of a Service-Oriented Architecture (SOA) a
 Distributed under the MIT License — use it, change it, ship it, just keep the
 copyright notice. See [LICENSE](LICENSE) for the full text.
 
-## Known Limitations
+## :warning: Known Limitations and Issues
 
-- The current version can process only one image and adds only one image to the display being created. This will be addressed in a future release (see [![GitHub issue state #47](https://shields.io/badge/GitHub_issue_47-red?style=flat-square)](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/47)).
+- **Current version can process only one image** and adds only one image to the display being created. This will be addressed in a future release (see [![GitHub issue state #47](https://shields.io/badge/GitHub_issue_47-red?style=flat-square)](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/47)).
+- **Local inference is slow.** It takes about 3.6 minutes per model invocation on the CPU, and a run chains together several of them. See [performance.md](performance.md)
+- **The frontend passes a file path**, not a file. Both containers must therefore point to the same directory. This is solved using a volume, but it is not a robust solution.
+- **No authentication** on the front end or API, no rate limit. The noVNC view of the fallback path runs without a password, which is why its port is explicitly bound only to `127.0.0.1`.
+- **The interface does not indicate which operating mode it is using.** In hosted mode, every product photo leaves the computer, but this is only specified in the configuration. See [W14](reflection-w14-responsible-ai.md).
+- **The form's selectors are hard-coded.** The website has no interface; any redesign breaks the tool. See [W12](reflection-w12-drift.md).
+- **The price estimate is a recommendation, not an appraisal.** It is based on the results of two web searches and on a model whose sense of price is frozen at the level of its training.
+- **Small models are unreliable when called from the tool.** The local approach using `qwen3:1.7b` fails significantly more often than the hosted one.
+- **Uploaded images are not automatically deleted.** They accumulate in the `uploads` volume until they are manually removed.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
