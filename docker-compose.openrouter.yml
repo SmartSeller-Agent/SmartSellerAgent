@@ -1,0 +1,108 @@
+# SmartSellerAgent — hosted inference via OpenRouter
+#
+#   docker compose -f docker-compose.openrouter.yml up --build
+#
+# Alternative to the default docker-compose.yml, which runs the models locally
+# in an ollama container. Here there is no ollama service at all: nothing is
+# downloaded, nothing runs on the CPU, and the models answer in seconds instead
+# of minutes. In exchange this needs an OpenRouter API key with credit, and the
+# requests (including the product photos) leave the machine.
+#
+# Deliberately a standalone file rather than an override: docker-compose.yml
+# wires api -> ollama-init via depends_on, and Compose 2.23 can neither drop a
+# depends_on in an override nor skip a profiled dependency.
+#
+# Required in .env:
+#   OPENROUTER_API_KEY=sk-or-v1-...
+#
+# Model slugs: https://openrouter.ai/models
+#
+# Run only one of the two stacks at a time — both use the same project name and
+# container names. Stop the other one with `docker compose down` first.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: smartselleragent:latest
+    container_name: smartseller-api
+    ports:
+      - "8000:8000"
+      # noVNC — see docker-compose.yml for why this is bound to 127.0.0.1.
+      - "127.0.0.1:6080:6080"
+    environment:
+      # Both models are OpenAI-protocol compatible, so only the base URL,
+      # the key and the model id differ from the local setup.
+      TEXT_API_BASE: https://openrouter.ai/api/v1
+      TEXT_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is not set — add it to .env}
+      TEXT_MODEL_ID: ${OPENROUTER_TEXT_MODEL:-qwen/qwen3-8b}
+      VISION_API_BASE: https://openrouter.ai/api/v1
+      VISION_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is not set — add it to .env}
+      VISION_MODEL_ID: ${OPENROUTER_VISION_MODEL:-google/gemini-2.5-flash}
+      # Provider-specific request extras as JSON. Left empty on purpose: src/config.py
+      # applies a sensible OpenRouter default (reasoning off — required, because
+      # smolagents sends tool_choice=required, which Qwen3 rejects in thinking mode).
+      # Set this in .env to override that default.
+      MODEL_EXTRA_BODY: ${MODEL_EXTRA_BODY:-}
+      # Observability (W5) — optional, tracing is skipped when keys are empty
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      OTEL_DEBUG_EXPORT: ${OTEL_DEBUG_EXPORT:-}
+      # --- kleinanzeigen.de publishing ---------------------------------
+      # Same settings as in docker-compose.yml; see there for the reasoning.
+      KLEINANZEIGEN_STATE_DIR: /app/.state
+      KLEINANZEIGEN_VNC: "true"
+      DISPLAY: ":99"
+      KLEINANZEIGEN_HEADLESS: "false"
+      KLEINANZEIGEN_NO_SANDBOX: "true"
+      # SAFETY SWITCH, one of two — see docker-compose.yml. Both this and the
+      # checkbox in the UI are needed before anything goes live.
+      KLEINANZEIGEN_ALLOW_PUBLISH: ${KLEINANZEIGEN_ALLOW_PUBLISH:-}
+    # Chromium keeps its renderer memory in /dev/shm; 64 MB is not enough.
+    shm_size: 1gb
+    volumes:
+      - uploads:/app/test/images/uploads
+      # The saved login. Only api needs it — the browser runs there.
+      - marketplace-state:/app/.state
+    # W11: the /health route doubles as the container healthcheck
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Spans are exported in batches — give the container time to flush on SIGTERM
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  frontend:
+    image: smartselleragent:latest
+    container_name: smartseller-frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    environment:
+      API_BASE_URL: http://api:8000
+      # Points at the host, not into the compose network: the link is opened
+      # in the user's own browser.
+      VNC_URL: ${VNC_URL:-http://localhost:6080/vnc.html?autoconnect=1&resize=scale}
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+    volumes:
+      - uploads:/app/test/images/uploads
+    command:
+      - streamlit
+      - run
+      - src/frontend.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+    restart: unless-stopped
+
+volumes:
+  uploads:
+  marketplace-state:

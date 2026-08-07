@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[project]
+name = "smartselleragent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "ddgs>=9.14.4",
+    "duckduckgo-search>=8.1.1",
+    "langfuse>=4.7.1",
+    "openai>=2.41.0",
+    # Browser-Automatisierung für die Kleinanzeigen-Veröffentlichung.
+    # Das Paket allein genügt für die Tests; die Chromium-Binaries holt
+    # `playwright install chromium` (im Image ein eigener Build-Schritt).
+    "playwright>=1.58.0",
+    "requests>=2.34.2",
+    "smolagents[toolkit,telemetry]>=1.26.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+    "openinference-instrumentation-smolagents>=0.1.0",
+    "streamlit>=1.60.0",
+    "fastapi>=0.136.3",
+    "uvicorn>=0.49.0",
+    "pydantic>=2.13.4",
+    # Wird von FastAPI für Datei-Uploads gebraucht (UploadFile). Kam bisher nur
+    # als Nebenabhängigkeit mit — hier wird sie direkt benutzt, also gehört sie
+    # ausdrücklich in die Liste.
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+smartselleragent = "src.app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.15.16",
+]
+
+[tool.uv]
+package = true

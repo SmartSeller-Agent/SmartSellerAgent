@@ -1,0 +1,34 @@
+# API Keys env files
+.env
+
+# Marketplace browser session — these cookies ARE the login to the account.
+.state/
+*_session.json
+screenshots/
+
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Tool caches (pytest and ruff also write their own nested .gitignore,
+# listing them here makes the intent explicit and greys them out in the IDE)
+.pytest_cache/
+.ruff_cache/
+
+# Build / packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# vs code settings
+.vscode/
+
+# test images
+test/images/uploads/*
+
+# further testing stuff
+tmp_*/

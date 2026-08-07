@@ -1,0 +1,44 @@
+# Secrets — never bake credentials into an image layer.
+# Configuration is injected at runtime via docker compose (see docker-compose.yml).
+.env
+.env.*
+!.env.example
+
+# Browser session of the logged-in marketplace account (cookies = a valid login).
+# Belongs in a runtime volume, never in an image layer.
+.state/
+*_session.json
+screenshots/
+tmp_browser_automation/
+
+# Local virtual environment (the image builds its own via uv)
+.venv/
+
+# Python cache / build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Version control & CI
+.git/
+.github/
+.gitignore
+
+# Editor / tooling
+.vscode/
+.idea/
+
+# Docker files themselves are not needed inside the build context
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Docs (README.md is required by the hatchling build and copied explicitly)
+CONTRIBUTING.md
+requirements.md
+requirements_files/
