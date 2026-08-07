@@ -60,9 +60,9 @@ The requirements that were not met were intentionally left unmet, as they could 
 | W9 | Input validation & error handling            |:white_check_mark:| error handling in the vision tool (also input is forced to be `.png` or `.jpg`), HTTP 404/500 handling in /run-task |
 | W10 | CI/CD pipeline triggered by push            |:white_check_mark:| `.github/workflows/ci.yml` runs on push to `develop` and `main` |
 | W11 | Monitoring endpoint (`/health` or metrics)  |:white_check_mark:| `/health` is also container healthcheck (see also debug/info output) |
-| W12 | Data/concept drift reflection               |:warning:         | combine both reflections and fill with human written text [reflection-w12-drift.md](reflection-w12-drift.md) |
-| W13 | Continuous learning concept                 |:warning:         | combine both reflections and fill with human written text [reflection-w13-continuous-learning.md](reflection-w13-continuous-learning.md) |
-| W14 | Responsible AI reflection                   |:warning:         | combine both reflections and fill with human written text [reflection-w14-responsible-ai.md](reflection-w14-responsible-ai.md) |
+| W12 | Data/concept drift reflection               |:white_check_mark:| [reflection-w12-drift.md](reflection-w12-drift.md) |
+| W13 | Continuous learning concept                 |:white_check_mark:| [reflection-w13-continuous-learning.md](reflection-w13-continuous-learning.md) |
+| W14 | Responsible AI reflection                   |:white_check_mark:| [reflection-w14-responsible-ai.md](reflection-w14-responsible-ai.md)|
 
 
 ## Requirements Definitions

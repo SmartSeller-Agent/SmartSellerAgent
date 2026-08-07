@@ -1,51 +1,125 @@
-# W12 — Data and concept drift (reflection)
+# W12: Reflexion zu Data und Concept Drift
 
-> **Scaffold.** Requirement: *"at least half a page: How might drift affect the
-> system? What would be noticeable?"* (VL 11)
->
-> Guiding questions below — the text is yours. Delete these quote blocks as you
-> write. Half a page means roughly 300–400 words.
+> Wahlpflichtanforderung W12 (VL 11): *Wie könnte sich Drift auf das System
+> auswirken? Was würde man bemerken?*
 
-## Where drift can enter this system
+## Zwei Arten von Drift
 
-> Think through the inputs that change over time, independently of your code:
->
-> - **Prices** — the resale value of a used Kallax shelf in two years is not
->   today's. The web search returns current listings, but the model's own price
->   intuition is frozen at its training cutoff.
-> - **Products** — new devices, new brands, discontinued lines. What does the
->   vision model do with a product it has never seen?
-> - **Photos** — camera quality, framing and lighting conventions shift; so do
->   the platforms people sell on and the style expected there.
-> - **The search source** — DuckDuckGo result formats and ranking change; a
->   scraped snippet that parses today may not parse next year.
-> - **The models themselves** — `qwen/qwen3-8b` on OpenRouter can be updated or
->   retired under the same slug. Silent drift with no code change on your side.
+Data Drift und Concept Drift können ein System erheblich beeinflussen, weil sie
+die Grundlage verändern, auf der es seine Entscheidungen trifft. Von Data Drift
+spricht man, wenn sich die Datenverteilung im Lauf der Zeit verschiebt, also
+andere Produkte, andere Fotos oder andere Nutzergruppen auftreten. Concept Drift
+wiegt schwerer. Hier sehen die Daten nicht nur anders aus, sondern die Beziehung
+zwischen Eingabe und richtigem Ergebnis hat sich verändert. Ein Zusammenhang, der
+früher verlässlich war, gilt einfach nicht mehr. Für ein System, das
+Gebrauchtpreise schätzt, bedeutet das, dass es weiter auf alten Annahmen
+aufbaut, obwohl sich die Realität längst verschoben hat.
 
-## What would be noticeable — and what would not
+Der SmartSellerAgent trainiert selbst kein Modell. Daraus könnte man schließen,
+dass ihn Drift nicht betrifft. Tatsächlich ist eher das Gegenteil der Fall. Weil
+das System fast vollständig aus zugekauften Bausteinen besteht, nämlich einem
+Sprachmodell, einem Vision-Modell, einer Websuche und einer fremden Website,
+liegen sämtliche Driftquellen außerhalb des eigenen Codes. Sie lassen sich
+deshalb auch nicht durch ein erneutes Training beheben.
 
-> The uncomfortable part: which of these would you actually *see*?
->
-> - Loud failures: search returns nothing, the API rejects a request, the vision
->   tool errors out. These surface immediately.
-> - Quiet failures: prices drift 30% off, listings sound outdated, the vision
->   model confidently misidentifies a new product. **Nothing in the current
->   system would flag this** — there is no ground truth to compare against.
->
-> Discuss which signals you *could* observe with what already exists: the
-> Langfuse traces record inputs, outputs and step counts per run. What would you
-> look at there?
+## Wo Drift in diesem System eintritt
 
-## What you would do about it
+**Preise.** Der Wiederverkaufswert eines gebrauchten Kallax-Regals ist in zwei
+Jahren ein anderer als heute. Die Websuche liefert zwar aktuelle Anzeigen, aber
+das Preisgefühl des Sprachmodells ist auf dem Stand seines Trainings eingefroren.
+Verschärft wird das durch eine bewusste Entscheidung im Projekt: Der
+Orchestrator darf höchstens zwei Suchen pro Auftrag durchführen, weil er sich
+sonst im Schrittbudget verliert. Damit haben wir Aktualität gegen
+Zuverlässigkeit getauscht. Je weniger recherchiert wird, desto stärker wiegt das
+veraltete Wissen des Modells.
 
-> Be concrete and proportionate — this is a student project, not a production
-> system. Options worth weighing:
->
-> - A small fixed evaluation set of photos with known reference prices, re-run
->   periodically.
-> - Logging estimated price vs. actual selling price, if that feedback existed.
-> - Alerting on step counts and error rates via the trace data.
-> - Pinning model versions instead of floating slugs.
->
-> Say which of these you would actually implement and which you consider out of
-> proportion.
+**Produkte und Fotos.** Neue Geräte, neue Marken, eingestellte Serien. Was das
+Vision-Modell mit einem Produkt macht, das es noch nie gesehen hat, ist nicht
+vorhersagbar. Sicher ist nur, dass es antwortet, und zwar in demselben
+souveränen Ton wie bei einem bekannten Produkt. Auch Kameraqualität,
+Bildausschnitt und Lichtverhältnisse verändern sich über die Jahre.
+
+**Die fremde Website.** Das ist im Rückblick der stillste und zugleich
+gefährlichste Kanal. Kleinanzeigen.de bietet keine Schnittstelle an, deshalb
+steuert das System das echte Formular über fest verdrahtete Selektoren wie
+`#gdpr-banner-accept` oder `#ad-price-type`. Jede Änderung am Seitenaufbau bricht
+das Werkzeug. Während der Entwicklung ist uns das mehrfach passiert. Der
+Versandbereich existiert im DOM erst, nachdem eine Kategorie gewählt wurde, und
+die Erkennung der Login-Seite prüfte zunächst nur auf `m-einloggen`, während der
+tatsächliche Dienst unter `login.kleinanzeigen.de` läuft. Beides waren keine
+Programmierfehler im engeren Sinn, sondern falsche Annahmen über eine Seite, die
+uns nicht gehört.
+
+**Das Verhalten des Anbieters.** Auch die Gegenseite verändert sich, und zwar
+absichtlich. Im Verlauf der Entwicklung tauchte eine Sicherheitsabfrage auf,
+verschwand nach einer Änderung der Browser-Startparameter wieder, und
+schließlich sperrte der Anbieter den IP-Bereich des Containers für Anmeldungen.
+Das ist Drift in einer Umgebung, die aktiv gegen Automatisierung arbeitet.
+
+**Die Modelle selbst.** `qwen/qwen3-8b` kann bei OpenRouter unter demselben Namen
+aktualisiert oder abgeschaltet werden. Das Verhalten ändert sich dann, ohne dass
+im Repository eine einzige Zeile anders wäre.
+
+## Was auffallen würde und was nicht
+
+Die unangenehme Frage ist, welche dieser Verschiebungen man tatsächlich *sähe*.
+
+Laute Fehler melden sich von selbst. Ein Selektor greift nicht, das Formular
+läuft in einen Timeout, die Anmeldung wird abgelehnt, die Schnittstelle
+antwortet mit HTTP 500. Genau diese Klasse ist uns im Projekt regelmäßig
+begegnet, und sie ist vergleichsweise harmlos, weil sie den Lauf abbricht statt
+ihn zu verfälschen.
+
+Das eigentliche Problem sind die leisen Fehler. Liegt der geschätzte Preis
+30 Prozent daneben, klingt die Anzeige veraltet oder erkennt das Vision-Modell
+ein neues Produkt selbstbewusst falsch, dann bemerkt das im aktuellen System
+schlicht **niemand**. Es gibt keine Grundwahrheit, gegen die verglichen werden
+könnte, und das Ergebnis sieht in jedem Fall plausibel aus.
+
+Ein Vorfall aus der Entwicklung zeigt das exemplarisch, auch wenn seine Ursache
+keine Drift war. Der Orchestrator verbrauchte sein Schrittbudget in Websuchen,
+musste eine Schlussantwort liefern und behauptete darin, die Anzeige sei
+veröffentlicht worden. Tatsächlich war nichts geschehen. Die Antwort war
+formvollendet und vollständig falsch. Daraus haben wir eine allgemeine Lehre
+gezogen, die auch für Drift gilt: **Man darf nicht der Erzählung des Systems
+glauben, sondern muss messen, was wirklich passiert ist.** Seither führt das
+Veröffentlichungswerkzeug ein eigenes Protokoll (`publish_attempts`), und die
+Oberfläche zeigt dieses Protokoll statt der Zusammenfassung des Modells.
+
+## Was sich mit dem Vorhandenen beobachten ließe
+
+Die Langfuse-Traces zeichnen bereits jeden Lauf mit Eingaben, Werkzeugaufrufen,
+Schrittzahl und Endergebnis auf. Daraus ließen sich ohne neue Infrastruktur zwei
+Frühwarnzeichen ableiten. Eine steigende durchschnittliche Schrittzahl bedeutet,
+dass das System schwerer zum Ziel kommt. Eine steigende Fehlerquote der
+Marktplatz-Werkzeuge deutet darauf hin, dass sich die Website verändert hat. Was
+noch fehlt, ist der Schritt vom Trace zum Alarm.
+
+## Was wir tun würden
+
+Für ein Studienprojekt erscheinen uns drei Maßnahmen verhältnismäßig:
+
+1. **Eine kleine feste Prüfmenge** aus einigen Fotos mit bekannten
+   Referenzpreisen, die in regelmäßigen Abständen neu bewertet wird. Weicht die
+   Schätzung deutlich ab, ist etwas gedriftet. Das ist der einzige Weg, leise
+   Fehler überhaupt sichtbar zu machen.
+2. **Ein Selektortest gegen einen gespeicherten Seitenschnappschuss.** Das
+   Werkzeug `scripts/inspect_offer_form.py` liest die Formularstruktur ohnehin
+   schon aus. Ein regelmäßiger Abgleich würde eine Umgestaltung der Website
+   melden, bevor ein Nutzer davon betroffen ist.
+3. **Modellversionen festnageln** statt gleitender Namen zu verwenden, damit ein
+   Anbieterwechsel nicht unbemerkt das Verhalten verändert.
+
+Nicht verhältnismäßig wäre für dieses Projekt eine Überwachung der
+Preisabweichung gegen tatsächliche Verkaufserlöse, denn die dafür nötigen Daten
+existieren schlicht nicht. Warum das so ist, steht in
+[W13](reflection-w13-continuous-learning.md).
+
+## Schluss
+
+Drift ist nicht nur ein technisches, sondern auch ein organisatorisches Problem.
+Wird sie nicht früh erkannt, trifft das System über längere Zeit falsche
+Entscheidungen, ohne dass die Ursache sichtbar wird. Beim SmartSellerAgent kommt
+hinzu, dass er auf fremden Bausteinen aufsetzt, die sich unabhängig von uns
+verändern. Die Fähigkeit, eine Veränderung überhaupt zu *bemerken*, ist deshalb
+wichtiger als die Fähigkeit, sie zu beheben.
