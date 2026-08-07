@@ -8,9 +8,11 @@ packages = ["src"]
 [project]
 name = "smartselleragent"
 version = "0.1.0"
-description = "Add your description here"
+description = "Multi-agent system that turns a product photo into a ready-to-publish marketplace listing"
 readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "ddgs>=9.14.4",
     "duckduckgo-search>=8.1.1",
