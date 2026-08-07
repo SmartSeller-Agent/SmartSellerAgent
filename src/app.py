@@ -188,6 +188,12 @@ def run_agent_task(request: TaskRequest):
         # Falls der Prompt keine Platzhalter {} hat (wie z.B. dein create_listing)
         final_task = task_prompt_template 
 
+    # Vor dem Lauf feststellen, ob eine Anzeige überhaupt entstehen kann.
+    # Danach wäre die Auskunft weniger wert: Das Veröffentlichungs-Tool trägt
+    # bei einem Fehlschlag selbst ein abgelehntes Urteil ein, und dann sähe
+    # jeder Lauf so aus, als hätte von Anfang an die Anmeldung gefehlt.
+    blocker = marketplace.publish_blocker()
+
     try:
         # 3. Das Multi-Agent-System (orchestrator) mit dem fertigen Task starten.
         #    Die Freigabe gilt nur für die Dauer dieses Aufrufs: smolagents ruft
@@ -198,7 +204,10 @@ def run_agent_task(request: TaskRequest):
             # Innerhalb des Rahmens auslesen, danach ist das Protokoll wieder weg.
             attempts = marketplace.publish_records()
 
-            if request.task_name in PUBLISHING_TASKS and not attempts:
+            # Nachholen nur, wenn es etwas nachzuholen gibt. Fehlt der Browser
+            # oder die Anmeldung, kostete der zweite Anlauf bloß eine weitere
+            # Modellrunde und endete am selben Hindernis.
+            if request.task_name in PUBLISHING_TASKS and not attempts and not blocker:
                 result = f"{result}\n\n{_publish_afterwards(result, request)}"
                 attempts = marketplace.publish_records()
         return {
@@ -207,6 +216,11 @@ def run_agent_task(request: TaskRequest):
             # Was das Tool wirklich getan hat — mitgeschrieben vom Tool selbst,
             # nicht der Erzählung des Modells entnommen.
             "publish_attempts": attempts,
+            # Stand vor dem Lauf: Wenn hier etwas steht, konnte am Ende nur der
+            # Anzeigentext herauskommen. Die Oberfläche sagt das dazu, statt
+            # den Anwender aus einer fehlenden Erfolgsmeldung schließen zu
+            # lassen.
+            "publish_blocker": blocker,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -214,8 +228,10 @@ def run_agent_task(request: TaskRequest):
 
 # -------------------------- Marktplatz-Anmeldung --------------------------
 # Die Anmeldung bei kleinanzeigen.de läuft bewusst von Hand ab: Captcha und
-# Zwei-Faktor-Abfrage kann kein Skript lösen. Der Container zeigt den Browser
-# dafür über noVNC an. Zugangsdaten nimmt die Anwendung nie entgegen.
+# Zwei-Faktor-Abfrage kann kein Skript lösen. Das Fenster dafür steht
+# standardmäßig auf dem Rechner des Anwenders (scripts/host_browser.py); in der
+# Rückfallvariante zeigt der Container seinen eigenen Browser über noVNC an.
+# Zugangsdaten nimmt die Anwendung nie entgegen.
 _login_job = LoginJob(marketplace.login_interactive)
 
 
@@ -235,6 +251,10 @@ def _session_payload() -> dict:
         # Damit die Oberfläche einen abgeschalteten Schalter erklären kann,
         # statt ihn wirkungslos anzubieten.
         "publishing_enabled": marketplace.publishing_enabled(),
+        # Was einer Anzeige gerade im Weg steht, in einem Satz für den
+        # Anwender — oder None. Damit die Oberfläche es schon vor dem Lauf
+        # sagen kann und nicht erst hinterher.
+        "publish_blocker": marketplace.publish_blocker(),
         # Wo der Browser läuft. Davon hängt ab, wohin die Oberfläche den
         # Anwender schickt: auf seinen eigenen Bildschirm oder in die
         # noVNC-Ansicht des Containers.
@@ -323,10 +343,11 @@ def marketplace_session_verify():
 
 @api.post("/marketplace/login")
 def marketplace_login_start():
-    """Öffnet das Anmeldefenster im Browser des Containers.
+    """Öffnet das Anmeldefenster in dem Browser, den die Anwendung steuert.
 
-    Kehrt sofort zurück; der Vorgang wartet danach minutenlang auf den
-    Menschen vor dem noVNC-Fenster.
+    Das ist der Browser auf dem Rechner des Anwenders, oder in der
+    Rückfallvariante der des Containers. Kehrt sofort zurück; der Vorgang
+    wartet danach minutenlang auf den Menschen vor dem Fenster.
     """
     # Vorab prüfen statt den Lauf erst im Thread scheitern zu lassen: ohne
     # sichtbaren Browser gibt es nichts zu bedienen, und der Aufrufer soll das
@@ -335,8 +356,10 @@ def marketplace_login_start():
         raise HTTPException(
             status_code=409,
             detail=(
-                "Kein sichtbarer Browser. Im Container KLEINANZEIGEN_VNC=true und "
-                "KLEINANZEIGEN_HEADLESS=false setzen (docker-compose tut das bereits)."
+                "Kein sichtbarer Browser. Entweder den Browser auf dem eigenen "
+                "Rechner starten (uv run python -m scripts.host_browser) oder "
+                "für den Browser des Containers KLEINANZEIGEN_VNC=true und "
+                "KLEINANZEIGEN_HEADLESS=false setzen."
             ),
         )
     return _login_job.start().as_dict()

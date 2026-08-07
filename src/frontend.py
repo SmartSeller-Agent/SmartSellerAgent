@@ -8,6 +8,7 @@ muss. Sie läuft im Docker-Aufbau in einem eigenen Container.
 import os
 import time
 from pathlib import Path
+from typing import Optional
 
 import requests
 import streamlit as st
@@ -299,21 +300,34 @@ def render_session_sidebar():
 # --------------------------------------------------------------------------
 # Was tatsächlich passiert ist
 # --------------------------------------------------------------------------
-def render_publish_outcome(attempts: list) -> None:
+def render_publish_outcome(attempts: list, blocker: Optional[str] = None) -> None:
     """Zeigt den Ausgang so an, wie das Tool ihn protokolliert hat.
 
     Bewusst nicht aus dem Text des Agenten abgeleitet: Ein Sprachmodell hat
     hier schon berichtet, eine Anzeige sei online gegangen, obwohl das
     Veröffentlichen abgeschaltet und niemand angemeldet war. Was mit einer
     unumkehrbaren Aktion geschehen ist, darf nicht Erzählung sein.
+
+    ``blocker`` ist der vor dem Lauf festgestellte Grund, warum gar keine
+    Anzeige entstehen konnte. Er steht hier, weil "der Agent hat das Tool nicht
+    aufgerufen" nach einem Fehler klingt, während in Wahrheit schlicht der
+    Browser fehlte oder niemand angemeldet war.
     """
     if not attempts:
-        st.warning(
-            "Es wurde **keine** Anzeige eingestellt — der Agent hat das "
-            "Veröffentlichungs-Tool gar nicht aufgerufen. Falls der Text unten "
-            "etwas anderes behauptet, gilt diese Meldung.",
-            icon="⚠️",
-        )
+        if blocker:
+            st.info(
+                f"Es ist **nur der Anzeigentext** entstanden. {blocker}\n\n"
+                "Der Text unten ist fertig und lässt sich von Hand verwenden. "
+                "Ist die Anmeldung erledigt, genügt ein erneuter Lauf.",
+                icon="📝",
+            )
+        else:
+            st.warning(
+                "Es wurde **keine** Anzeige eingestellt — der Agent hat das "
+                "Veröffentlichungs-Tool gar nicht aufgerufen. Falls der Text "
+                "unten etwas anderes behauptet, gilt diese Meldung.",
+                icon="⚠️",
+            )
         return
 
     for attempt in attempts:
@@ -328,8 +342,18 @@ def render_publish_outcome(attempts: list) -> None:
                 "abgesendet. Es ist keine Anzeige entstanden.",
                 icon="👀",
             )
+        elif outcome == "no_browser":
+            st.info(
+                f"Es ist **nur der Anzeigentext** entstanden. {detail}\n\n"
+                "Der Text unten ist fertig und lässt sich von Hand verwenden.",
+                icon="📝",
+            )
         elif outcome == "not_logged_in":
-            st.error(f"Keine Anzeige erstellt — nicht angemeldet. {detail}", icon="🔒")
+            st.error(
+                f"Es ist **nur der Anzeigentext** entstanden — bei "
+                f"kleinanzeigen.de ist niemand angemeldet. {detail}",
+                icon="🔒",
+            )
         elif outcome == "invalid":
             st.error(f"Keine Anzeige erstellt — die Angaben waren unbrauchbar:\n\n{detail}")
         else:
@@ -390,6 +414,15 @@ if uploaded_file is not None:
             icon="⚠️",
         )
 
+    # Vorher sagen, was hinterher herauskommt. Ein Lauf dauert Minuten, und die
+    # Enttäuschung am Ende ist vermeidbar: Der Grund steht schon jetzt fest.
+    blocker = session.get("publish_blocker") if session else None
+    if blocker:
+        st.info(
+            f"Es entsteht nur der Anzeigentext, es wird nichts eingetragen. {blocker}",
+            icon="📝",
+        )
+
     if st.button("Verkaufsanzeige generieren"):
         with st.spinner("Agent arbeitet: Analysiert Bild und recherchiert Preise im Web..."):
             # Das Backend erwartet einen Dateipfad, also legen wir das Bild im
@@ -413,7 +446,9 @@ if uploaded_file is not None:
             )
 
         if ok:
-            render_publish_outcome(result.get("publish_attempts", []))
+            render_publish_outcome(
+                result.get("publish_attempts", []), result.get("publish_blocker")
+            )
             st.markdown("### Dein Anzeigentext:")
             st.info(result.get("result", "Kein Text generiert."))
         else:

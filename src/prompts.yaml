@@ -86,9 +86,11 @@ publisher_agent:
     that work is already done when you are called.
 
     Always work in this order:
-    1. Call check_marketplace_session first. If it says nobody is logged in,
-       stop and report exactly that. Do NOT call publish_listing afterwards:
-       it cannot succeed, and only a human can fix it by logging in.
+    1. Call check_marketplace_session first. If it says nobody is logged in, or
+       that the browser is not running, stop and report that message verbatim,
+       followed by the sentence "Es ist nur der Anzeigentext entstanden."
+       Do NOT call publish_listing afterwards: it cannot succeed, and only a
+       human can fix it by starting the browser or logging in.
     2. Otherwise call publish_listing exactly once, with:
        - title: at most 65 characters. Shorten it yourself if it is longer.
        - description: the German text you were given.
