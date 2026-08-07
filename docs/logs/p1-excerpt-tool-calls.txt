@@ -1,0 +1,78 @@
+P1 - Genuine AI agent with tool usage
+=====================================
+
+Verbatim excerpt from agent-run.txt (the full log sits next to this file).
+Run of 2026-08-07, text model qwen/qwen3-8b via OpenRouter, verbosity_level=LogLevel.DEBUG.
+
+Two tool calls are shown, one that gathers information and one that acts:
+
+  A) lines  132-158   vision_agent calls analyze_product_image on the uploaded photo
+  B) lines 1266-1295  publisher_agent calls publish_listing, which drives a real
+                      browser through the kleinanzeigen.de offer form
+
+Both blocks are copied without any change. The only edit made anywhere in the
+logs is the postcode, replaced by XXXXX.
+
+=== A) analyze_product_image ==================================== agent-run.txt:132-158 ===
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ Step 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Output message of the LLM: ─────────────────────────────────────────────────────
+ChatCompletion(id='gen-1786129559-oMMI0KBdCErsCVDfUvak',                        
+choices=[Choice(finish_reason='tool_calls', index=0, logprobs=None,             
+message=ChatCompletionMessage(content=None, refusal=None, role='assistant',     
+annotations=None, audio=None, function_call=None,                               
+tool_calls=[ChatCompletionMessageFunctionToolCall(id='call_bc3066726ecd46be9190b
+d', function=Function(arguments='{"image_path":                                 
+"/app/test/images/uploads/Kallax4x4.png"}', name='analyze_product_image'),      
+type='function', index=0)], reasoning=None),                                    
+native_finish_reason='tool_calls')], created=1786129559, model='qwen/qwen3-8b', 
+object='chat.completion', moderation=None, service_tier=None,                   
+system_fingerprint=None, usage=CompletionUsage(completion_tokens=27,            
+prompt_tokens=1434, total_tokens=1461,                                          
+completion_tokens_details=CompletionTokensDetails(accepted_prediction_tokens=Non
+e, audio_tokens=0, reasoning_tokens=0, rejected_prediction_tokens=None,         
+image_tokens=0), prompt_tokens_details=PromptTokensDetails(audio_tokens=0,      
+cache_write_tokens=0, cached_tokens=0, video_tokens=0), cost=0.000180063,       
+is_byok=False, cost_details={'upstream_inference_cost': 0.000180063,            
+'upstream_inference_prompt_cost': 0.000167778,                                  
+'upstream_inference_completions_cost': 1.2285e-05}), provider='Alibaba')        
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Calling tool: 'analyze_product_image' with arguments: {'image_path':         │
+│ '/app/test/images/uploads/Kallax4x4.png'}                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Observations: IKEA KALLAX
+[Step 1: Duration 2.84 seconds| Input tokens: 1,434 | Output tokens: 27]
+
+=== B) publish_listing ======================================== agent-run.txt:1266-1295 ===
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Calling tool: 'publish_listing' with arguments: {'title': 'IKEA Kallax 4x4   │
+│ weiß, guter Zustand', 'description': 'Hochwertiges IKEA Kallax 4x4 Regal in  │
+│ weiß, in sehr gutem Zustand. Ideal für die Organisation von Büchern, Medien  │
+│ und anderen Gegenständen. Maße: Höhe 147 cm, Breite 147 cm, Tiefe 39 cm.',   │
+│ 'price': 80, 'image_paths': '/app/test/images/uploads/Kallax4x4.png',        │
+│ 'price_type': 'FIXED', 'shipping': False, 'category': 'Möbel'}               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+INFO:     127.0.0.1:43732 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59876 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42350 - "GET /health HTTP/1.1" 200 OK
+Observations: PROBELAUF — die Anzeige wurde NICHT veröffentlicht. Das Formular 
+wurde nur ausgefüllt.
+Kein Cookie-Banner vorhanden.
+Anzeigentyp 'Angebot' gewählt.
+Titel gesetzt: IKEA Kallax 4x4 weiß, guter Zustand
+Kategorie gewählt: Familie, Kind & Baby → Kinderzimmermöbel → Weitere 
+Kinderzimmermöbel (ID 20)
+Diese Kategorie bietet keine Versandoption an.
+Beschreibung gesetzt (186 Zeichen).
+Preisart steht bereits auf 'Festpreis'.
+Preis gesetzt: 80 €
+1 Bild(er) hochgeladen.
+PLZ gesetzt: XXXXX
+Formularinhalt vor dem Absenden gegengelesen.
+PROBELAUF: Formular ausgefüllt, aber NICHT abgesendet. Kontrolle: 
+screenshots/06_form_filled.png
+Das ausgefüllte Formular bleibt im Browser stehen. Dort kannst du es prüfen, 
+ändern und selbst veröffentlichen — oder den Tab einfach schließen.
+[Step 2: Duration 50.00 seconds| Input tokens: 5,152 | Output tokens: 158]
+

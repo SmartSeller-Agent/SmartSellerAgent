@@ -1218,6 +1218,13 @@ def check_marketplace_session() -> str:
         # Netzwerk- oder Browserproblem: sagt nichts über die Anmeldung aus.
         return f"Anmeldung konnte nicht geprüft werden: {e}"
 
+    # Trägt der Browser die Anmeldung in seinem Profil, sagt unsere Datei nichts
+    # über den Anmeldezustand aus. Sie trotzdem voranzustellen ergab die
+    # widersprüchliche Auskunft "Keine gespeicherte Anmeldung ... Angemeldet, die
+    # Sitzung ist gültig" — beides richtig und zusammen irreführend.
+    if session_lives_in_browser():
+        return "\n".join(log)
+
     return f"{status.describe()}\n" + "\n".join(log)
 
 

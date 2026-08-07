@@ -15,14 +15,20 @@
 <br />
 <div align="center">
   <a href="https://github.com/SmartSeller-Agent/SmartSellerAgent">
-    <img src="docs/figures/logo_2.png" alt="Logo" width="100" height="100">
+    <img src="docs/figures/logo_2.png" alt="Logo" width="150" height="150">
   </a>  
   <br>
   <br>
 
-  Explore the documentation below 
+  :arrow_double_down: <u><b> Explore the documentation below </b> </u> :arrow_double_down:
 
   [![Architecture][architecture-shield]][architecture-url] [![Requirements][requirements-shield]][requirements-url] [![Performance][performance-shield]][performance-url]
+
+  <b></b>
+
+  <b> Problems </b> :question: 
+
+  [Known Limitations][known-limitations-url]  &middot;  [Open an Issue](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/new)
 </div>
 
 
@@ -35,12 +41,25 @@ SmartSellerAgent does that from a single photo.
 
 You upload the picture, thats it. From there a multi-agent system takes over: a vision agent identifies the product, brand and condition; the orchestrator researches realistic second-hand prices with a web search and writes the ad in German. If you ask it to, a publisher agent then drives a real browser through the kleinanzeigen.de offer form and fills everything in, the last click stays yours unless you explicitly hand it over.
 
+## Contents
+
+- [Quickstart](#quickstart-openrouter) — the short path with hosted models
+- [Example](#example-one-run-end-to-end) — which input leads to which behaviour
+- [Requirements](#requirements) — what you need installed
+- [Configuration](#configuration) — the `.env` file and what is in it
+- [How to Run](#how-to-run) — hosted models (A1) or local models (A2)
+- [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende) — login and the two publish switches
+- [Architecture Overview](#architecture-overview) — how the parts fit together
+- [Documentation](#documentation) — the detailed docs in `docs/`
+- [License](#license) — MIT
 
 ## Quickstart (OpenRouter)
 
-The recommended path: the models run at **OpenRouter** (so nothing is downloaded and a run takes minutes instead of tens of minutes). 
-
-All you need is Docker and an API key. *(Only the optional publishing step at the end adds one more tool, `uv`.)*
+> [!TIP]
+> The recommended way: all models run at **OpenRouter** (no models are downloaded and a run takes minutes instead of tens of minutes). 
+>
+> All you need is Docker and an API key. 
+> *(Only the optional publishing step at the end adds one more tool, `uv`.)*
 
 **1. Get a key at [openrouter.ai/keys](https://openrouter.ai/keys)**: 
 It starts with `sk-or-v1-`; **setting a credit limit** on it is a good idea while testing.
@@ -104,16 +123,56 @@ Without both, the form is only filled in for you to check and submit yourself.
 No API key, or the photos must not leave the machine? Then skip all of the above and run [Option A2](#option-a2--docker-with-local-models-w7) instead — plain
 `docker compose up --build` with no `.env` at all.
 
-## Contents
+## Example: one run end to end
 
-- [Quickstart](#quickstart-openrouter) — the short path with hosted models
-- [Requirements](#requirements) — what you need installed
-- [Configuration](#configuration) — the `.env` file and what is in it
-- [How to Run](#how-to-run) — hosted models (A1) or local models (A2)
-- [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende) — login and the two publish switches
-- [Architecture Overview](#architecture-overview) — how the parts fit together
-- [Documentation](#documentation) — the detailed docs in `docs/`
-- [License](#license) — MIT
+Everything below is taken from a real run; the full log of it sits in
+[docs/logs/agent-run-thinking.txt](docs/logs/agent-run-thinking.txt).
+
+**Input.** One photo, nothing else. This run used
+[`test/images/Kallax4x4.png`](test/images/Kallax4x4.png), which ships with the
+repository, so you can reproduce it without owning a Kallax.
+
+**What the agent does with it.** Five steps, each one a decision rather than a
+fixed script:
+
+1. Hands the photo to the vision agent, which answers `IKEA KALLAX`.
+2. Searches the web for `IKEA KALLAX used price`.
+3. Searches again, now narrowed to the German market: `IKEA KALLAX 4x4 used price germany`. Then it stops, because the prompt allows two searches and spending more would cost it the steps it still needs.
+4. Hands title, description, price, category and shipping to the publisher agent, which checks the login and drives the browser through the offer form.
+5. Reports back.
+
+**Output.** This is what appears in the web UI, verbatim:
+
+```text
+## Titel
+IKEA KALLAX 4x4 Regal - Gebraucht
+
+## Beschreibung
+Ich biete ein gebrauchtes IKEA KALLAX Regal (4x4 Fächer) zum Verkauf an. Es ist
+in gutem Zustand und kann vielseitig genutzt werden. Ideal für Bücher,
+Dekoration oder als Raumteiler. Nur Abholung.
+
+## Preis
+50 € (VB)
+
+## Status
+Die Anzeige für das IKEA KALLAX Regal wurde als Probelauf erstellt, aber nicht
+veröffentlicht.
+```
+
+**And in the browser.** The offer form is filled in and left standing for you:
+ad type "Angebot", title, category (`Haus & Garten → Wohnzimmer → Regale`,
+picked from the site's own suggestions), "Nur Abholung", the description, price
+type "VB", the price and the postcode from your profile. It is **not** submitted.
+Above the text the UI states what really happened, taken from the tool's own
+record rather than from the agent's summary.
+
+**A different situation gives a different run.** Start the same job without the
+host browser and the publisher agent stops right after checking the login, the
+answer ends with `## Status` / `Nicht eingestellt.`, and the UI adds the reason:
+the browser on your machine is not running, so only the listing text was
+produced. That path is in the other log,
+[docs/logs/agent-run.txt](docs/logs/agent-run.txt).
 
 ## Requirements
 
@@ -333,14 +392,19 @@ For working on the code (instant reload instead of an image rebuild) see [CONTRI
 That path is a development setup, not a third deployment mode.
 
 ## Architecture Overview
-The system is built on the principles of a Service-Oriented Architecture (SOA) and strictly separates the user interface from data processing:
+The system separates the user interface from the processing, and the processing from the agents:
 
-*   **Frontend (Streamlit):** A lightweight web interface that manages the file upload and communicates asynchronously with the API.
-*   **Backend (FastAPI):** Provides REST endpoints (`/run-task`) to receive requests in a standardized manner.
-*   **Multi-Agent-System (smolagents):**
-    *   **Orchestrator:** The main agent that controls the workflow and has access to the WebSearch and Pricing tools.
-    *   **Vision-Agent:** A sub-agent exclusively responsible for the visual analysis of the product images.
-*   **Models:** Configurable per deployment. In the default setup the LLMs run locally in an Ollama container, which keeps the data on the machine and avoids cloud costs at the price of speed. Alternatively the same containers can be pointed at a hosted provider (OpenRouter) — much faster, but the requests including the product photos then leave the machine. Text and vision model are configured separately and may sit at different providers.
+*   **Frontend (Streamlit, [`src/frontend.py`](src/frontend.py)):** A lightweight web interface. It writes the uploaded photo to a shared volume and talks to the API over HTTP. It deliberately holds no domain logic: everything it knows, it asks the backend for.
+*   **Backend (FastAPI, [`src/app.py`](src/app.py)):** The REST layer. `/run-task` starts an agent run, `/health` doubles as the container healthcheck (W11), and the `/marketplace/*` routes make the manual marketplace login operable from the UI.
+*   **Multi-agent system (smolagents):**
+    *   **Orchestrator:** Runs the job end to end. Own tools: web search and margin calculation.
+    *   **Vision agent:** Product photos only — what the item is, the brand, the visible condition.
+    *   **Publisher agent:** Puts a finished listing into the kleinanzeigen.de form. Checks the login first and stops when it is missing, instead of trying and failing.
+*   **Browser (Playwright):** The site has no API, so a real browser is driven through the offer form. By default it runs on *your* machine and the container attaches to it; a browser inside the container, watched over noVNC, is the fallback. Publishing needs two switches, and neither is visible to the language model.
+*   **Models:** Text and vision model are configured separately and both speak the OpenAI protocol, so only a base URL separates a local Ollama container from a hosted provider. With the `.env` from the template the models run at OpenRouter, which is fast but sends every product photo to a third party; without any `.env` they run locally, which is slow but keeps the photos on the machine.
+*   **Observability (W5):** OpenTelemetry instruments smolagents and ships the spans to Langfuse. Without credentials the agent behaves identically and simply exports nothing.
+
+*Why* it is built this way, which alternatives were weighed and where the limits are: [docs/architecture.md](docs/architecture.md).
 
 ## Documentation
 
@@ -360,9 +424,17 @@ The system is built on the principles of a Service-Oriented Architecture (SOA) a
 Distributed under the MIT License — use it, change it, ship it, just keep the
 copyright notice. See [LICENSE](LICENSE) for the full text.
 
-## Known Limitations
+## :warning: Known Limitations and Issues
 
-- The current version can process only one image and adds only one image to the display being created. This will be addressed in a future release (see [![GitHub issue state #47](https://shields.io/badge/GitHub_issue_47-red?style=flat-square)](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/47)).
+- **Current version can process only one image** and adds only one image to the display being created. This will be addressed in a future release (see [![GitHub issue state #47](https://shields.io/badge/GitHub_issue_47-red?style=flat-square)](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/47)).
+- **Local inference is slow.** It takes about 3.6 minutes per model invocation on the CPU, and a run chains together several of them. See [performance.md](docs/performance.md)
+- **The frontend passes a file path**, not a file. Both containers must therefore point to the same directory. This is solved using a volume, but it is not a robust solution.
+- **No authentication** on the front end or API, no rate limit. The noVNC view of the fallback path runs without a password, which is why its port is explicitly bound only to `127.0.0.1`.
+- **The interface does not indicate which operating mode it is using.** In hosted mode, every product photo leaves the computer, but this is only specified in the configuration. See [W14](docs/reflection-w14-responsible-ai.md).
+- **The form's selectors are hard-coded.** The website has no interface; any redesign breaks the tool. See [W12](docs/reflection-w12-drift.md).
+- **The price estimate is a recommendation, not an appraisal.** It is based on the results of two web searches and on a model whose sense of price is frozen at the level of its training.
+- **Small models are unreliable when called from the tool.** The local approach using `qwen3:1.7b` fails significantly more often than the hosted one.
+- **Uploaded images are not automatically deleted.** They accumulate in the `uploads` volume until they are manually removed.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -386,3 +458,5 @@ copyright notice. See [LICENSE](LICENSE) for the full text.
 [requirements-url]: docs/requirements.md
 [performance-shield]: https://img.shields.io/badge/Performance-0c3727?style=for-the-badge
 [performance-url]: docs/performance.md
+
+[known-limitations-url]: #warning-known-limitations-and-issues
