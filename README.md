@@ -40,7 +40,7 @@ You upload the picture, thats it. From there a multi-agent system takes over: a 
 
 The recommended path: the models run at **OpenRouter** (so nothing is downloaded and a run takes minutes instead of tens of minutes). 
 
-All you need is Docker and an API key.
+All you need is Docker and an API key. *(Only the optional publishing step at the end adds one more tool, `uv`.)*
 
 **1. Get a key at [openrouter.ai/keys](https://openrouter.ai/keys)**: 
 It starts with `sk-or-v1-`; **setting a credit limit** on it is a good idea while testing.
@@ -75,12 +75,28 @@ docker compose up --build
 **Optional: filling the kleinanzeigen.de form.** 
 That part drives a real browser, and shows you the filled-in form on kleinanzeigen.de.
 
-Start it in a second terminal and leave it open, then log in once in that window:
+It is the only step that needs more than Docker: [`uv`](https://docs.astral.sh/uv/), the Python project runner. Install it once:
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+*Or through a package manager you already use: `brew install uv` on macOS, `pipx install uv` anywhere. Restart the terminal afterwards so it is on your `PATH` — `uv --version` should then answer.*
+
+That is the only installation. Start the browser in a second terminal and leave it open, then log in once in that window:
 
 ```bash
 cd SmartSellerAgent # you have to be in the project root for uv to find the scripts
 uv run python -m scripts.host_browser
 ```
+
+*The first run takes a moment: `uv` sets up the environment, and the script fetches the Chromium browser itself (~150 MB) if it is not there yet.*
 
 Nothing goes live by accident: publishing needs `KLEINANZEIGEN_ALLOW_PUBLISH=true` in `.env` *and* the checkbox in the UI. 
 Without both, the form is only filled in for you to check and submit yourself.
@@ -107,9 +123,11 @@ Python, no Ollama and no API key are needed for the self-contained
 [hosted setup](#quickstart-openrouter) adds nothing but an OpenRouter key.
 
 One exception: filling the listing into the kleinanzeigen.de form drives a
-browser on your machine, and that one is started with `uv` in a second terminal —
-see [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende). Everything
-up to the finished listing runs in Docker alone.
+browser on your machine, and that one is started with
+[`uv`](https://docs.astral.sh/uv/) in a second terminal. The
+[Quickstart](#quickstart-openrouter) shows how to install `uv` on Windows, macOS
+and Linux, and [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende)
+explains the rest. Everything up to the finished listing runs in Docker alone.
 
 Working on the code instead of just running it? See [CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
@@ -185,12 +203,17 @@ leave it open; the container drives it and the window appears on your desktop:
 uv run python -m scripts.host_browser
 ```
 
+This is the only part of the project that needs `uv` on the host; the
+[Quickstart](#quickstart-openrouter) has the one-line installer for Windows,
+macOS and Linux. Nothing else has to be installed by hand: `uv` builds the
+environment on the first run, and the script downloads the Chromium browser
+itself if it is missing. Everything up to the finished listing runs in Docker
+alone.
+
 No configuration needed, the containers already point at it. The login then
 lives in that browser's own profile, which persists. This is the reliable path:
 the marketplace treats the container's browser as a different device and has
-refused sessions there that work everywhere else. This is also the only part of
-the project that needs Python on the host — everything up to the finished
-listing runs in Docker alone.
+refused sessions there that work everywhere else.
 
 *A browser inside the container (fallback).* The container then runs its own
 browser on a virtual screen and streams it to `localhost:6080`. No extra
@@ -336,6 +359,10 @@ The system is built on the principles of a Service-Oriented Architecture (SOA) a
 
 Distributed under the MIT License — use it, change it, ship it, just keep the
 copyright notice. See [LICENSE](LICENSE) for the full text.
+
+## Known Limitations
+
+- The current version can process only one image and adds only one image to the display being created. This will be addressed in a future release (see [![GitHub issue state #47](https://shields.io/badge/GitHub_issue_47-red?style=flat-square)](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/47)).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
