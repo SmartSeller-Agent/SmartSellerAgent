@@ -1,6 +1,12 @@
-# SmartSellerAgent — full stack (W6: prediction service, W7: containerisation, W11: /health)
+# SmartSellerAgent — full stack with LOCAL models
+# (W6: prediction service, W7: containerisation, W11: /health)
 #
-#   docker compose up --build
+#   docker compose -f docker-compose.yml up --build
+#
+# This is what a plain `docker compose up` starts when there is no .env: the
+# self-contained path, no API key needed. Copying .env.example to .env sets
+# COMPOSE_FILE and switches the plain command to the hosted stack in
+# docker-compose.openrouter.yml; commenting that line out comes back here.
 #
 # Starts four services:
 #   ollama       — local LLM runtime serving the text and vision models
@@ -86,10 +92,15 @@ services:
         condition: service_completed_successfully
     ports:
       - "8000:8000"
-      # noVNC — watch the browser the agent drives. Bound to 127.0.0.1 on
-      # purpose: the view is unauthenticated, and whoever reaches it controls a
-      # browser that is logged into the marketplace account.
+      # noVNC — only serves something in the fallback mode below
+      # (KLEINANZEIGEN_VNC=true). Bound to 127.0.0.1 on purpose: the view is
+      # unauthenticated, and whoever reaches it controls a browser that is
+      # logged into the marketplace account.
       - "127.0.0.1:6080:6080"
+    extra_hosts:
+      # Docker Desktop resolves this name by itself; on plain Linux it has to
+      # be mapped explicitly, otherwise the CDP url below points nowhere.
+      - "host.docker.internal:host-gateway"
     environment:
       # Inside the compose network the runtime is reachable by service name,
       # so these deliberately override any localhost value coming from .env.
@@ -108,13 +119,24 @@ services:
       # --- kleinanzeigen.de publishing ---------------------------------
       # The saved login lives on the volume mounted below, not in the image.
       KLEINANZEIGEN_STATE_DIR: /app/.state
-      # Brings up the virtual screen and the noVNC bridge (docker/entrypoint.sh).
-      KLEINANZEIGEN_VNC: "true"
+      # DEFAULT: drive a browser running on the HOST, started separately with
+      # `uv run python -m scripts.host_browser` — see that file. This is the
+      # reliable path: the container's own browser has software rendering,
+      # almost no fonts and a virtual screen, so the marketplace treats it as a
+      # different device and refuses sessions that work everywhere else.
+      # Note the "-" instead of ":-": an empty KLEINANZEIGEN_BROWSER_CDP= in
+      # .env therefore wins and switches to the container browser below.
+      KLEINANZEIGEN_BROWSER_CDP: ${KLEINANZEIGEN_BROWSER_CDP-http://host.docker.internal:9222}
+      # FALLBACK: with an empty CDP url above, the container starts its own
+      # browser; KLEINANZEIGEN_VNC=true then brings up the virtual screen and
+      # the noVNC bridge (docker/entrypoint.sh) so it can be watched on 6080.
+      # Off by default because the host browser needs neither.
+      KLEINANZEIGEN_VNC: ${KLEINANZEIGEN_VNC:-false}
       DISPLAY: ":99"
-      # Visible rather than headless — that is the whole point of the screen
-      # above. The manual login needs it, and it makes the agent's work
-      # watchable. Set both of these the same way or the browser will not start.
-      KLEINANZEIGEN_HEADLESS: "false"
+      # Visible rather than headless. Only relevant in the fallback mode: the
+      # manual login needs a window, which is what the virtual screen is for.
+      # Set this and KLEINANZEIGEN_VNC the same way or the browser will not start.
+      KLEINANZEIGEN_HEADLESS: ${KLEINANZEIGEN_HEADLESS:-false}
       # Chromium's own sandbox needs privileges the unprivileged container user
       # does not have; the container is the isolation boundary instead.
       KLEINANZEIGEN_NO_SANDBOX: "true"

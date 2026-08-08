@@ -143,6 +143,29 @@ class TaskRequest(BaseModel):
 def health_check():
     return {"status": "ok", "message": "Der SmartSeller Agent läuft!"}
 
+# Aufgaben, an deren Ende eine Anzeige stehen soll.
+PUBLISHING_TASKS = {"create_and_publish_listing"}
+
+
+def _publish_afterwards(listing_text: str, request: "TaskRequest") -> str:
+    """Holt den Veröffentlichungsschritt nach, wenn er ausgefallen ist.
+
+    Beobachtet: Der Orchestrator verfing sich in Websuchen, erreichte sein
+    Schrittlimit und lieferte eine erzwungene Schlussantwort — in der er
+    behauptete, die Anzeige sei eingestellt. Beauftragt hatte er niemanden.
+
+    Ein Schritt, der zwingend passieren soll, darf nicht davon abhängen, dass
+    ein Modell vorher mit seinem Budget haushaltet. Aufgerufen wird das nur bei
+    leerem Protokoll — es kann also nichts doppelt entstehen.
+    """
+    return publisher_agent.run(
+        "Stelle die folgende, bereits fertige Anzeige bei Kleinanzeigen ein. "
+        "Übernimm Titel, Beschreibung und Preis unverändert; deine Aufgabe ist "
+        "nur das Einstellen.\n"
+        f"Das Produktbild liegt unter '{request.image_path}'.\n\n{listing_text}"
+    )
+
+
 @api.post("/run-task")
 def run_agent_task(request: TaskRequest):
     # 1. Prompt dynamisch suchen (unterstützt deine neuen Tasks UND die vom Partner)
@@ -165,6 +188,12 @@ def run_agent_task(request: TaskRequest):
         # Falls der Prompt keine Platzhalter {} hat (wie z.B. dein create_listing)
         final_task = task_prompt_template 
 
+    # Vor dem Lauf feststellen, ob eine Anzeige überhaupt entstehen kann.
+    # Danach wäre die Auskunft weniger wert: Das Veröffentlichungs-Tool trägt
+    # bei einem Fehlschlag selbst ein abgelehntes Urteil ein, und dann sähe
+    # jeder Lauf so aus, als hätte von Anfang an die Anmeldung gefehlt.
+    blocker = marketplace.publish_blocker()
+
     try:
         # 3. Das Multi-Agent-System (orchestrator) mit dem fertigen Task starten.
         #    Die Freigabe gilt nur für die Dauer dieses Aufrufs: smolagents ruft
@@ -174,12 +203,24 @@ def run_agent_task(request: TaskRequest):
             result = orchestrator.run(final_task)
             # Innerhalb des Rahmens auslesen, danach ist das Protokoll wieder weg.
             attempts = marketplace.publish_records()
+
+            # Nachholen nur, wenn es etwas nachzuholen gibt. Fehlt der Browser
+            # oder die Anmeldung, kostete der zweite Anlauf bloß eine weitere
+            # Modellrunde und endete am selben Hindernis.
+            if request.task_name in PUBLISHING_TASKS and not attempts and not blocker:
+                result = f"{result}\n\n{_publish_afterwards(result, request)}"
+                attempts = marketplace.publish_records()
         return {
             "task": request.task_name,
             "result": result,
             # Was das Tool wirklich getan hat — mitgeschrieben vom Tool selbst,
             # nicht der Erzählung des Modells entnommen.
             "publish_attempts": attempts,
+            # Stand vor dem Lauf: Wenn hier etwas steht, konnte am Ende nur der
+            # Anzeigentext herauskommen. Die Oberfläche sagt das dazu, statt
+            # den Anwender aus einer fehlenden Erfolgsmeldung schließen zu
+            # lassen.
+            "publish_blocker": blocker,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -187,8 +228,10 @@ def run_agent_task(request: TaskRequest):
 
 # -------------------------- Marktplatz-Anmeldung --------------------------
 # Die Anmeldung bei kleinanzeigen.de läuft bewusst von Hand ab: Captcha und
-# Zwei-Faktor-Abfrage kann kein Skript lösen. Der Container zeigt den Browser
-# dafür über noVNC an. Zugangsdaten nimmt die Anwendung nie entgegen.
+# Zwei-Faktor-Abfrage kann kein Skript lösen. Das Fenster dafür steht
+# standardmäßig auf dem Rechner des Anwenders (scripts/host_browser.py); in der
+# Rückfallvariante zeigt der Container seinen eigenen Browser über noVNC an.
+# Zugangsdaten nimmt die Anwendung nie entgegen.
 _login_job = LoginJob(marketplace.login_interactive)
 
 
@@ -208,6 +251,21 @@ def _session_payload() -> dict:
         # Damit die Oberfläche einen abgeschalteten Schalter erklären kann,
         # statt ihn wirkungslos anzubieten.
         "publishing_enabled": marketplace.publishing_enabled(),
+        # Was einer Anzeige gerade im Weg steht, in einem Satz für den
+        # Anwender — oder None. Damit die Oberfläche es schon vor dem Lauf
+        # sagen kann und nicht erst hinterher.
+        "publish_blocker": marketplace.publish_blocker(),
+        # Wo der Browser läuft. Davon hängt ab, wohin die Oberfläche den
+        # Anwender schickt: auf seinen eigenen Bildschirm oder in die
+        # noVNC-Ansicht des Containers.
+        "browser_on_host": bool(marketplace.BROWSER_CDP),
+        # Läuft dieser Browser gerade? Der Container kann ihn nicht starten —
+        # ein Programm auf dem Rechner des Anwenders zu starten ist genau das,
+        # was ein Container nicht darf. Also muss die Oberfläche darum bitten.
+        "browser_reachable": marketplace.browser_reachable(),
+        # Wo die Anmeldung liegt: im Profil des Browsers oder in unserer Datei.
+        # Davon hängt ab, was die Oberfläche überhaupt sinnvoll anzeigen kann.
+        "session_in_browser": marketplace.session_lives_in_browser(),
     }
 
 
@@ -271,7 +329,8 @@ def marketplace_session_verify():
     Sitzung erkennen — die Ablaufzeiten in der Datei sehen dann noch gültig aus.
     """
     status = marketplace.read_session_status()
-    if not status.usable:
+    # Trägt der Browser die Anmeldung selbst, sagt die Datei nichts aus.
+    if not status.usable and not marketplace.session_lives_in_browser():
         raise HTTPException(status_code=409, detail=status.describe())
 
     try:
@@ -284,10 +343,11 @@ def marketplace_session_verify():
 
 @api.post("/marketplace/login")
 def marketplace_login_start():
-    """Öffnet das Anmeldefenster im Browser des Containers.
+    """Öffnet das Anmeldefenster in dem Browser, den die Anwendung steuert.
 
-    Kehrt sofort zurück; der Vorgang wartet danach minutenlang auf den
-    Menschen vor dem noVNC-Fenster.
+    Das ist der Browser auf dem Rechner des Anwenders, oder in der
+    Rückfallvariante der des Containers. Kehrt sofort zurück; der Vorgang
+    wartet danach minutenlang auf den Menschen vor dem Fenster.
     """
     # Vorab prüfen statt den Lauf erst im Thread scheitern zu lassen: ohne
     # sichtbaren Browser gibt es nichts zu bedienen, und der Aufrufer soll das
@@ -296,8 +356,10 @@ def marketplace_login_start():
         raise HTTPException(
             status_code=409,
             detail=(
-                "Kein sichtbarer Browser. Im Container KLEINANZEIGEN_VNC=true und "
-                "KLEINANZEIGEN_HEADLESS=false setzen (docker-compose tut das bereits)."
+                "Kein sichtbarer Browser. Entweder den Browser auf dem eigenen "
+                "Rechner starten (uv run python -m scripts.host_browser) oder "
+                "für den Browser des Containers KLEINANZEIGEN_VNC=true und "
+                "KLEINANZEIGEN_HEADLESS=false setzen."
             ),
         )
     return _login_job.start().as_dict()
