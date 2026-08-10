@@ -28,7 +28,8 @@
 
   <b> Problems </b> :question: 
 
-  [Known Limitations][known-limitations-url]  &middot;  [Open an Issue](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/new)
+  [Known Limitations][known-limitations-url]  &middot;  [Open an Issue](https://github.com/SmartSeller-Agent/SmartSellerAgent/issues/new) &middot; [Project Board](https://github.com/orgs/SmartSeller-Agent/projects/1/views/2)
+
 </div>
 
 
@@ -37,20 +38,20 @@
 
 Selling a used item online is mostly clerical work: figure out what the thing actually is, look up what comparable ones go for, decide on a price, write a title and a description that read well, and then type all of it into a form. 
 
-SmartSellerAgent does that from a single photo.
+**SmartSellerAgent** does that from a single photo.
 
 You upload the picture, thats it. From there a multi-agent system takes over: a vision agent identifies the product, brand and condition; the orchestrator researches realistic second-hand prices with a web search and writes the ad in German. If you ask it to, a publisher agent then drives a real browser through the kleinanzeigen.de offer form and fills everything in, the last click stays yours unless you explicitly hand it over.
 
 ## Contents
 
-- [Quickstart](#quickstart-openrouter) — the short path with hosted models
-- [Example](#example-one-run-end-to-end) — which input leads to which behaviour
-- [Requirements](#requirements) — what you need installed
-- [Configuration](#configuration) — the `.env` file and what is in it
-- [How to Run](#how-to-run) — hosted models (A1) or local models (A2)
-- [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende) — login and the two publish switches
-- [Architecture Overview](#architecture-overview) — how the parts fit together
-- [Documentation](#documentation) — the detailed docs in `docs/`
+- [Quickstart](#quickstart-openrouter): the short path with hosted models
+- [Example](#example-one-run-end-to-end): which input leads to which behaviour
+- [Requirements](#requirements): what you need installed
+- [Configuration](#configuration): the `.env` file and what is in it
+- [How to Run](#how-to-run): hosted models (A1) or local models (A2)
+- [Publishing to kleinanzeigen.de](#publishing-to-kleinanzeigende): login and the two publish switches
+- [Architecture Overview](#architecture-overview): how the parts fit together
+- [Documentation](#documentation): the detailed docs in `docs/`
 - [License](#license) — MIT
 
 ## Quickstart (OpenRouter)
@@ -62,7 +63,7 @@ You upload the picture, thats it. From there a multi-agent system takes over: a 
 > *(Only the optional publishing step at the end adds one more tool, `uv`.)*
 
 **1. Get a key at [openrouter.ai/keys](https://openrouter.ai/keys)**: 
-It starts with `sk-or-v1-`; **setting a credit limit** on it is a good idea while testing.
+It starts with `sk-or-v1-` and **setting a credit limit** on it is always a good idea
 
 **2. Clone and create the `.env`:**
 
@@ -73,7 +74,7 @@ cp .env.example .env
 ```
 
 **3. Paste the key into that `.env`**
-it is the one line that is empty on purpose:
+It is the one line that is empty on purpose:
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
@@ -85,14 +86,14 @@ OPENROUTER_API_KEY=sk-or-v1-...
 docker compose up --build
 ```
 
-*No `-f` needed: the template already selects the hosted stack via `COMPOSE_FILE`. Forgetting the key stops the stack right there with a message saying so.*
+*No `-f` needed: the template already selects the hosted stack via `COMPOSE_FILE`. 
+Forgetting the key stops the stack right there with a message saying so.*
 
 **5. Open <http://localhost:8501>**:
 - enter you PLZ on first startup
-- upload a product photo and let it run. The result is a German listing with a title, a description and a suggested price.
+- upload a product photo and let it run. Result is a German listing with a title, description and suggested price.
 
-**Optional: filling the kleinanzeigen.de form.** 
-That part drives a real browser, and shows you the filled-in form on kleinanzeigen.de.
+**Optional: filling the kleinanzeigen.de form.** <br>That part drives a real browser, and shows you the filled-in form on kleinanzeigen.de.
 
 It is the only step that needs more than Docker: [`uv`](https://docs.astral.sh/uv/), the Python project runner. Install it once:
 
@@ -106,7 +107,8 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-*Or through a package manager you already use: `brew install uv` on macOS, `pipx install uv` anywhere. Restart the terminal afterwards so it is on your `PATH` — `uv --version` should then answer.*
+*Or through a package manager you already use: `brew install uv` on macOS, `pipx install uv` anywhere.*
+*Restart the terminal afterwards so it is on your `PATH` — `uv --version` should then answer.*
 
 That is the only installation. Start the browser in a second terminal and leave it open, then log in once in that window:
 
@@ -120,13 +122,11 @@ uv run python -m scripts.host_browser
 Nothing goes live by accident: publishing needs `KLEINANZEIGEN_ALLOW_PUBLISH=true` in `.env` *and* the checkbox in the UI. 
 Without both, the form is only filled in for you to check and submit yourself.
 
-No API key, or the photos must not leave the machine? Then skip all of the above and run [Option A2](#option-a2--docker-with-local-models-w7) instead — plain
-`docker compose up --build` with no `.env` at all.
+:question: No API key, or the photos must not leave the machine? Then skip all of the above and run [Option A2](#option-a2--docker-with-local-models-w7) instead — plain `docker compose up --build` with no `.env` at all.
 
 ## Example: one run end to end
 
-Everything below is taken from a real run; the full log of it sits in
-[docs/logs/agent-run-thinking.txt](docs/logs/agent-run-thinking.txt).
+Everything below is taken from a real run; the full log of it sits in [docs/logs/agent-run-thinking.txt](docs/logs/agent-run-thinking.txt).
 
 **Input.** One photo, nothing else. This run used
 [`test/images/Kallax4x4.png`](test/images/Kallax4x4.png), which ships with the
@@ -167,8 +167,8 @@ type "VB", the price and the postcode from your profile. It is **not** submitted
 Above the text the UI states what really happened, taken from the tool's own
 record rather than from the agent's summary.
 
-**A different situation gives a different run.** Start the same job without the
-host browser and the publisher agent stops right after checking the login, the
+**A different situation gives a different run.**
+Start the same job without the host browser and the publisher agent stops right after checking the login, the
 answer ends with `## Status` / `Nicht eingestellt.`, and the UI adds the reason:
 the browser on your machine is not running, so only the listing text was
 produced. That path is in the other log,
